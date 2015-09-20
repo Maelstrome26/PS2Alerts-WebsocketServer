@@ -3276,46 +3276,6 @@ function sendAll(messageType, message) // Sends message to WS Clients
     }
 }
 
-function sendRecursion(messageType, message, resultID)
-{
-    var messageToSend = {};
-
-    if (message) // If Valid
-    {
-        messageToSend.data = message;
-        messageToSend.messageType = messageType;
-
-        if (debug == 1)
-        {
-            console.log("WEBSOCKET MESSAGE:");
-            console.log(messageToSend);
-        }
-
-        if ((messageType == "alertStart") || (messageType == "alertEnd") || (messageType == "update")) // Send to monitor
-        {
-            Object.keys(clientConnections).forEach(function(key)
-            {
-                var clientConnection = clientConnections[key];
-
-                clientConnection.send(JSON.stringify(messageToSend), function(error)
-                {
-                    if (error)
-                    {
-                        delete clientConnections[clientConnection.id];
-
-                        console.log(critical("Websocket Monitor Error: "+error));
-                    }
-                });
-            });
-        }
-
-        if (config.debug.clients === true)
-        {
-            console.log(notice("Message Sent to Recursion clients"));
-        }
-    }
-}
-
 function DateCalc(d)
 {
     var year, month, day, hour, minute, seconds;
