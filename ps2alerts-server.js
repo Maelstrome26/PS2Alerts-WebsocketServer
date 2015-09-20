@@ -3955,11 +3955,6 @@ function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, 
 
     if (!charFlags[charID])
     {
-        if (debug == 2)
-        {
-            console.log(critical("CHARFLAGS OBJECT DOESNT EXIST, ADDING!"));
-        }
-
         var push = {
             "charID": charID,
             "vCharID": vCharID,
@@ -3987,7 +3982,6 @@ function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, 
 
     if (flag == "vKill")
     {
-
         if (charFlags[charID].vKill === 0)
         {
             charFlags[charID].killerVID = killerVID;
@@ -4009,12 +4003,6 @@ function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, 
         charFlags[charID].aName = attName;
         charFlags[charID].vName = vicName;
     }
-
-    if (debug == 2)
-    {
-        console.log(charFlags[charID]);
-    }
-
 }
 
 setInterval(function()
@@ -4022,15 +4010,6 @@ setInterval(function()
     for (var i = charIDs.length - 1; i >= 0; i--) // Loop through all of the monitored characters
     {
         var charID = charIDs[i];
-
-        if (debug == 2)
-        {
-            console.log(charID);
-
-            console.log(critical(JSON.stringify(charFlags[charID], null, 4)));
-
-            console.log("looping");
-        }
 
         if (charFlags[charID])
         {
@@ -4042,7 +4021,7 @@ setInterval(function()
 
             if ((charFlags[charID].kill == 1) && (charFlags[charID].vKill == 1)) // Vehicle with Occ
             {
-                if (debug == 2)
+                if (config.debug.vehicles === true)
                 {
                     console.log(critical("VEHICLE KILL WITH OCCUPANT DETECTED!"));
                 }
@@ -4051,7 +4030,7 @@ setInterval(function()
             }
             else if ((charFlags[charID].kill === 0) && (charFlags[charID].vKill === 1)) // Vehicle without Occ
             {
-                if (debug == 2)
+                if (config.debug.vehicles === true)
                 {
                     console.log(critical("VEHICLE KILL W/O OCCUPANT DETECTED"));
                 }
@@ -4060,7 +4039,7 @@ setInterval(function()
             }
             else if ((charFlags[charID].kill === 1) && (charFlags[charID].vKill === 0)) // Normal Kill Occ
             {
-                if (debug == 2)
+                if (config.debug.vehicles === true)
                 {
                     console.log(critical("NORMAL KILL DETECTED"));
                 }
