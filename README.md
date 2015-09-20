@@ -16,7 +16,7 @@ You will need the following technologies to run this application:
 When you clone the rep, you'll need to run the following NPM command to acquire the modules required to run the Websocket Server:
 
 ```
-npm install ws mysql clone cli-color time usage nodemailer
+npm install ws mysql clone cli-color time usage
 ```
 
 ### Todos
