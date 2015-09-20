@@ -21,5 +21,5 @@ npm install ws mysql clone cli-color time usage nodemailer
 
 ### Todos
 
-* Remove Email from script and assign to a variable
+* Strip out ServerSmash related code into either it's own branch or file.
 * Code Cleanup
