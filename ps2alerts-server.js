@@ -170,6 +170,7 @@ function checkAPIKey(APIKey, callback)
 
 generate_weapons(function() // Generate weapons first, before loading websocket
 {
+    console.log("WEAPONS READY!");
     conWatcherInterval = setInterval(function() //You can change this if you want to reconnect faster, or slower.
     {
         conWatcher();
@@ -191,6 +192,7 @@ generate_weapons(function() // Generate weapons first, before loading websocket
 **************/
 function persistentClient(wss)
 {
+    console.log("HOUSTON WE ARE A GO!");
     var connected = true;
 
     //Return Status of connection.
@@ -211,9 +213,11 @@ function persistentClient(wss)
         }
     };
 
+    console.log("Connecting Client...");
+
     client = new WebSocket('ws://push.api.blackfeatherproductions.com/?apikey='+config.extendedAPIKey); // Jhett's API
 
-    //Events
+    // Websocket Event callbacks
     client.on('open', function()
     {
         console.log(success("CONNECTED"));
@@ -552,7 +556,7 @@ function processMessage(messageData, client, wss, dbConnection)
                                     {
                                         insertVehicleStats(message, resultID, 0, function()
                                         {
-                                            if (debug == 1)
+                                            if (config.debug.vehicles === true)
                                             {
                                                 console.log(success("PROCESSED VEHICLE KILLS"));
                                             }
@@ -1785,7 +1789,7 @@ function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
                         }
                         else // If a duplicate
                         {
-                            if (debug == 1)
+                            if (config.debug.weapons === true)
                             {
                                 console.log(warning("DUPLICATE WEAPON TOTAL STAT DETECTED"));
                             }
@@ -1818,7 +1822,7 @@ function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
                             teamkills: combatArray.teamkill
                         };
 
-                        if (debug == 1)
+                        if (config.debug.wepaons === true)
                         {
                             console.log(weaponArray);
                         }
@@ -1835,7 +1839,7 @@ function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
                                 }
                                 else // If a duplicate
                                 {
-                                    if (debug == 1)
+                                    if (config.debug.weapons === true)
                                     {
                                         console.log(warning("DUPLICATE WEAPON STAT DETECTED"));
                                     }
@@ -2037,7 +2041,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                         }
                         else // If a duplicate
                         {
-                            if (debug == 1)
+                            if (config.debug.duplicates === true)
                             {
                                 console.log(warning("DUPLICATED PLAYER DEATH RECORD DETECTED"));
                                 reportError(err, "Insert Players Attacker Duplicated");
@@ -2134,7 +2138,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                                     }
                                     else // If a duplicate
                                     {
-                                        if (debug == 1)
+                                        if (config.debug.duplicates === true)
                                         {
                                             console.log(warning("DUPLICATED PLAYER DEATH RECORD DETECTED"));
                                         }
@@ -3135,7 +3139,7 @@ function sendResult(messageType, message, resultID) // Sends message to WS Clien
                 });
             }
 
-        if (debug == 1 && messageType != "keepalive")
+        if (config.debug.keepalive === true && messageType != "keepalive")
         {
             console.log(notice("Message Sent to Result Websockets"));
         }
@@ -3175,7 +3179,7 @@ function sendMonitor(messageType, message) // Sends message to WS Clients
             });
         }
 
-        if (debug == 1 && messageType != "keepalive")
+        if (config.debug.keepalive === true && messageType != "keepalive")
         {
             console.log(notice("Message Sent to Monitor Websockets"));
         }
@@ -3330,7 +3334,7 @@ function findPlayerName(playerID, world, callback)
             url = 'http://census.daybreakgames.com/s:'+config.serviceID+'/get/ps2:v2/character/?character_id='+playerID;
         }
 
-        if (debug == 1)
+        if (config.debug.census === true)
         {
             console.log("========== FINDING PLAYER NAME =========");
             console.log("INPUT :"+playerID);
@@ -3384,7 +3388,7 @@ function findPlayerName(playerID, world, callback)
 
                             if (valid == 1)
                             {
-                                if (debug == 1)
+                                if (config.debug.census === true)
                                 {
                                     console.log("RESPONSE: "+returned.character_list);
                                     console.log("INPUT :"+playerID);
@@ -3397,7 +3401,7 @@ function findPlayerName(playerID, world, callback)
                             }
                             else
                             {
-                                if (debug == 1)
+                                if (config.debug.census === true)
                                     console.log(warning("FAILED TO GET PLAYER NAME!"));
 
                                 callback(false, false);
@@ -3519,7 +3523,7 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
         }
         else
         {
-            if (debug == 1)
+            if (config.debug.cache === true)
             {
                 console.log(notice("PLAYER CACHE RESULT: " + JSON.stringify(result[0], null, 4)));
             }
@@ -3552,7 +3556,7 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
                                 }
                                 else
                                 {
-                                    if (debug == 1)
+                                    if (config.debug.cache === true)
                                     {
                                         console.log(warning("INVALID / DUPLICATED PLAYER CACHE RECORD DETECTED! Skipping!"));
                                     }
@@ -3560,7 +3564,7 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
                             }
                             else
                             {
-                                if (debug == 1)
+                                if (config.debug.cache === true)
                                 {
                                     console.log(success("INSERTED PLAYER RECORD INTO CACHE TABLE"));
                                 }
@@ -3579,7 +3583,7 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
             }
             else if (result[0])
             {
-                if (debug == 1)
+                if (config.debug.cache === true)
                 {
                     console.log(success("PLAYER CACHE HIT!"));
                 }
@@ -3663,7 +3667,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
                                         }
                                         else
                                         {
-                                            if (debug == 1)
+                                            if (config.debug.databaseWarnings === true)
                                             {
                                                 console.log(warning("INVALID / DUPLICATED OUTFIT CACHE RECORD DETECTED! Skipping!"));
                                             }
@@ -3671,7 +3675,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
                                     }
                                     else
                                     {
-                                        if (debug == 1)
+                                        if (config.debug.outfits === true)
                                         {
                                             console.log(success("INSERTED OUTFIT RECORD INTO CACHE TABLE"));
                                         }
@@ -3696,7 +3700,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
                 {
                     dbConnectionCache.query('UPDATE cache_hits SET cacheHits=cacheHits+1 WHERE dataType="OutfitCache"');
 
-                    if (debug == 1)
+                    if (config.debug.cache === true)
                     {
                         console.log(success("OUTFIT CACHE HIT!"));
                     }
@@ -4172,7 +4176,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                         }
                         else if (result.affectedRows === 0) // If no update happened, try again
                         {
-                            if (debug == 2)
+                            if (config.debug.vehicles === true)
                             {
                                 console.log("Inserting New Killer Vehicle Record");
                                 console.log(kID);
@@ -4211,7 +4215,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                         }
                         else if (result.affectedRows === 0) // If no update happened, must be an insert
                         {
-                            if (debug == 2)
+                            if (config.debug.vehicles === true)
                             {
                                 console.log("Inserting New Killer Vehicle Record");
                                 console.log(kID);
@@ -4269,7 +4273,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                         }
                         else if (result.affectedRows === 0) // If no update happened, try again
                         {
-                            if (debug == 2)
+                            if (config.debug.vehicles === true)
                             {
                                 console.log("Inserting New Victim Vehicle Record");
                                 console.log(vID);
@@ -4320,7 +4324,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                         }
                         else if (result.affectedRows === 0) // If no update happened, must be an insert
                         {
-                            if (debug == 2)
+                            if (config.debug.vehicles === true)
                             {
                                 console.log("Inserting New Victim Vehicle Record");
                                 console.log(vID);
@@ -5104,7 +5108,7 @@ setInterval(function()
 
 function checkDuplicateMessages(message, callback)
 {
-    if (debug == 1)
+    if (config.debug.duplicates)
     {
         console.log(warning("CHECKING FOR DUPLICATES START"));
         console.log(warning(JSON.stringify(message, null, 4)));
