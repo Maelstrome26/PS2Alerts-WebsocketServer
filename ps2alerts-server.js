@@ -414,7 +414,7 @@ function processMessage(messageData, client, wss, dbConnection)
         {
             if (messageValid === true)
             {
-                if (eventCheck != "-1") // If a valid event type
+                if (eventCheck != -1) // If a valid event type
                 {
                     message = message.payload;
 
