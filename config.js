@@ -1,5 +1,6 @@
 var config = {
     serviceID: 'yourcensusserviceID',
+    extendedAPIKey: 'yougetthisfromjhett12321',
     serverPort: 1337,
     database : {
         primary : {

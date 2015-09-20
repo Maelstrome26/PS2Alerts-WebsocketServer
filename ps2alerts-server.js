@@ -69,151 +69,20 @@ var instances = {};
 var populationInstances = {};
 var subscriptions = 0; // Check to see if we have valid subscriptions
 var subscriptionsRetry = 0;
-
-//-------------------------------------------------------------------
-/**
-*     WEBSOCKET CLIENT
-*     Manages, records and relays information provided by the DBG API.
-*/
-//-------------------------------------------------------------------
-
 var connectionState = 0;
+var activesNeeded = false; // A flag set when the activeAlert function requires to be called
 
-//Connection Watcher - Reconnects if websocket connection is dropped.
-function conWatcher()
-{
-    if(!wsClient.isConnected())
-    {
-        console.log(critical('Reconnecting...'));
-
-        var connectionState = 2;
-
-        var message =
-        {
-            state: connectionState,
-            admin: false,
-            response: 'auth'
-        };
-
-        sendAdmins("status", message);
-
-        wsClient = new persistentClient();
-    }
-}
-
-function subWatcher()
-{
-    if(wsClient.isConnected())
-    {
-        if (subscriptions === 0) // If the socket doesn't get a response from the API when subscriptions have been sent
-        {
-            console.log(critical('SUBSCRIPTIONS NOT PASSED! RECONNECTING...'));
-            subscriptionsRetry = 1;
-            wsClient = new persistentClient();
-        }
-    }
-}
-
-var wsClient;
+/**
+ * Intervals
+ */
 var upcomingCheckInterval;
 var conWatcherInterval;
 var subWatcherInterval;
 var perfInterval;
+
+var wsClient;
 var perfStats = {};
 var perfSecs = 0;
-
-setInterval(function()
-{
-    usage.lookup(pid, function(err, result) {
-        perfSecs++;
-        if (result !== undefined)
-        {
-            var memory = Math.round(result.memory / 1024 / 1024);
-            var cpu = Math.round(result.cpu);
-            var conns = Object.keys(clientConnections).length;
-
-            if (config.debug.perf === true && perfSecs === 30)
-            {
-                console.log(notice("============== PERFORMANCE =============="));
-                console.log("CPU: "+cpu+"% - MEM: "+memory+"MB - Conns: "+conns);
-                console.log(notice("========================================="));
-
-                perfSecs = 0;
-            }
-
-            perfStats =
-            {
-                "cpu": cpu,
-                "mem": memory,
-                "conns": conns,
-                "msgSec": messagesRecievedSec,
-                "msgLast": messagesRecievedLast * 2,
-                "state": connectionState,
-            };
-
-            sendAdmins("perf", perfStats);
-
-            messagesRecievedSec = 0;
-        }
-    });
-}, 1000);
-
-var activesNeeded = false;
-
-setInterval(function()
-{
-    if (activesNeeded === true)
-    {
-        var actives = '{"action":"activeMetagameEvents"}'; // Pull a list of all active alerts
-
-        try {
-            client.send(actives);
-        } catch (e) {
-            reportError("Error: "+e, "Metagame Active Alerts message failed", true);
-        }
-
-        activesNeeded = false;
-    }
-}, 2000);
-
-cleanCache();
-
-setInterval(function()
-{
-    cleanCache();
-}, 60000);
-
-function cleanCache()
-{
-    console.log(notice("Running cache clean routine"));
-    {
-        cachePool.getConnection(function(err, dbConnectionClean)
-        {
-            if (err)
-            {
-                throw(err);
-            }
-
-            var expiry = Math.round(new Date().getTime() / 1000);
-
-            dbConnectionClean.query("DELETE FROM outfit_cache WHERE expires <= "+expiry, function(err, result)
-            {
-                if (err) { throw(err); }
-
-                console.log("Outfit cache cleaned. Removed: "+result.affectedRows);
-            });
-
-            dbConnectionClean.query("DELETE FROM player_cache WHERE expires <= "+expiry, function(err, result)
-            {
-                if (err) { throw(err); }
-
-                console.log("Player cache cleaned. Removed: "+result.affectedRows);
-            });
-
-            dbConnectionClean.release();
-        });
-    }
-}
 
 /**************
 Admin API Keys
@@ -250,11 +119,6 @@ function generate_api_keys()
                     apiKeys[i].site = result[i].site;
                     apiKeys[i].admin = result[i].admin;
                 }
-            }
-
-            if (config.debug.API === true)
-            {
-                //console.log(apiKeys);
             }
         });
     });
@@ -300,9 +164,9 @@ function checkAPIKey(APIKey, callback)
     callback(isValid, username, admin);
 }
 
-/**********************
-    FIRE ZE LAZORS
-***********************/
+/*********************************************
+    FIRE ZE LAZORS (start the process going)
+*********************************************/
 
 generate_weapons(function() // Generate weapons first, before loading websocket
 {
@@ -318,15 +182,13 @@ generate_weapons(function() // Generate weapons first, before loading websocket
 
     generate_api_keys();
 
+    // BOOM
     wsClient = new persistentClient();
 });
 
 /**************
     Client    *
 **************/
-
-var extendedAPIKey = 'apikeyyouvebeengivenfromjett';
-
 function persistentClient(wss)
 {
     var connected = true;
@@ -349,7 +211,7 @@ function persistentClient(wss)
         }
     };
 
-    client = new WebSocket('ws://push.api.blackfeatherproductions.com/?apikey='+extendedAPIKey); // Jhett's API
+    client = new WebSocket('ws://push.api.blackfeatherproductions.com/?apikey='+config.extendedAPIKey); // Jhett's API
 
     //Events
     client.on('open', function()
@@ -429,37 +291,6 @@ var worldStatus = { // Assuming online always at first run
     2001: 'online'
 };
 
-var maintTimer = 30 * 1000;
-var maintenance = setInterval(function()
-{
-    if (config.debug.status === true && messagesRecieved > 5)
-    {
-        console.log(notice("TOTAL MESSAGES RECIEVED (1 min): "+messagesRecieved));
-    }
-
-    combatHistory();// Log combat history for active alerts
-
-    messagesRecieved = 0;
-    messagesRecievedLast = messagesRecieved;
-
-    checkInstances(function()
-    {
-        if (config.debug.instances === true)
-        {
-            if (instances.length > 0)
-            {
-                console.log(notice("=========== CURRENT ALERTS IN PROGRESS: ==========="));
-                console.log(instances);
-            }
-        }
-    });
-
-    checkMapInitial(function()
-    {
-        console.log(notice("Map inital checked"));
-    });
-
-}, maintTimer);
 
 function checkMapInitial(callback)
 {
@@ -5848,3 +5679,177 @@ wss.on('connection', function(clientConnection)
         });
     }); // End of check API key
 });
+
+/**
+ * Interval functions which fire maintenance tasks or required operations
+ */
+setInterval(function()
+{
+    usage.lookup(pid, function(err, result) {
+        perfSecs++;
+        if (result !== undefined)
+        {
+            var memory = Math.round(result.memory / 1024 / 1024);
+            var cpu = Math.round(result.cpu);
+            var conns = Object.keys(clientConnections).length;
+
+            if (config.debug.perf === true && perfSecs === 30)
+            {
+                console.log(notice("============== PERFORMANCE =============="));
+                console.log("CPU: "+cpu+"% - MEM: "+memory+"MB - Conns: "+conns);
+                console.log(notice("========================================="));
+
+                perfSecs = 0;
+            }
+
+            perfStats =
+            {
+                "cpu": cpu,
+                "mem": memory,
+                "conns": conns,
+                "msgSec": messagesRecievedSec,
+                "msgLast": messagesRecievedLast * 2,
+                "state": connectionState,
+            };
+
+            sendAdmins("perf", perfStats);
+
+            messagesRecievedSec = 0;
+        }
+    });
+}, 1000);
+
+setInterval(function()
+{
+    if (activesNeeded === true)
+    {
+        var actives = '{"action":"activeMetagameEvents"}'; // Pull a list of all active alerts
+
+        try {
+            client.send(actives);
+        } catch (e) {
+            reportError("Error: "+e, "Metagame Active Alerts message failed", true);
+        }
+
+        activesNeeded = false;
+    }
+}, 2000);
+
+cleanCache();
+
+/**
+ * Cleans the cache store of all old data every 60 seconds
+ *
+ * @see cleanCache
+ *
+ */
+setInterval(function()
+{
+    cleanCache();
+}, 60000);
+
+//Connection Watcher - Reconnects if websocket connection is dropped.
+function conWatcher()
+{
+    if(!wsClient.isConnected())
+    {
+        console.log(critical('Reconnecting...'));
+
+        var connectionState = 2;
+
+        var message =
+        {
+            state: connectionState,
+            admin: false,
+            response: 'auth'
+        };
+
+        sendAdmins("status", message);
+
+        wsClient = new persistentClient();
+    }
+}
+
+/**
+ * Watches subscription states. If they were never recieved, we restart the socket client.
+ */
+function subWatcher()
+{
+    if(wsClient.isConnected())
+    {
+        if (subscriptions === 0) // If the socket doesn't get a response from the API when subscriptions have been sent
+        {
+            console.log(critical('SUBSCRIPTIONS NOT PASSED! RECONNECTING...'));
+            subscriptionsRetry = 1;
+            wsClient = new persistentClient();
+        }
+    }
+}
+
+/**
+ * Cleans cache expiries out of the database
+ *
+ */
+function cleanCache()
+{
+    console.log(notice("Running cache clean routine"));
+    {
+        cachePool.getConnection(function(err, dbConnectionClean)
+        {
+            if (err)
+            {
+                throw(err);
+            }
+
+            var expiry = Math.round(new Date().getTime() / 1000);
+
+            dbConnectionClean.query("DELETE FROM outfit_cache WHERE expires <= "+expiry, function(err, result)
+            {
+                if (err) { throw(err); }
+
+                console.log("Outfit cache cleaned. Removed: "+result.affectedRows);
+            });
+
+            dbConnectionClean.query("DELETE FROM player_cache WHERE expires <= "+expiry, function(err, result)
+            {
+                if (err) { throw(err); }
+
+                console.log("Player cache cleaned. Removed: "+result.affectedRows);
+            });
+
+            dbConnectionClean.release();
+        });
+    }
+}
+
+var maintTimer = 30 * 1000;
+var maintenance = setInterval(function()
+{
+    if (config.debug.status === true && messagesRecieved > 5)
+    {
+        console.log(notice("TOTAL MESSAGES RECIEVED (1 min): "+messagesRecieved));
+    }
+
+    combatHistory();// Log combat history for active alerts
+
+    messagesRecieved = 0;
+    messagesRecievedLast = messagesRecieved;
+
+    checkInstances(function()
+    {
+        if (config.debug.instances === true)
+        {
+            if (instances.length > 0)
+            {
+                console.log(notice("=========== CURRENT ALERTS IN PROGRESS: ==========="));
+                console.log(instances);
+            }
+        }
+    });
+
+    checkMapInitial(function()
+    {
+        console.log(notice("Map inital checked"));
+    });
+
+}, maintTimer);
