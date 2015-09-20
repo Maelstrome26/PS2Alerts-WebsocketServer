@@ -116,19 +116,28 @@ if (ServerSmash == 1)
 {
     metagame = false;
 }
+
+/**
+ * Functionality toggles. Allows you to disablke certain factures of the socket as needed.
+ *
+ */
 var enable =
 {
-    metagame: metagame,
-    jaeger: true,
-    combat: true,
-    facilitycontrol: true,
-    vehicledestroy: true,
-    populationchange: true,
-    xpmessage: true,
-    classStats: true,
-    achievements: false
+    metagame: metagame, // Allows tracking of alerts
+    jaeger: true, // Allows messages from the event server Jaeer.
+    combat: true, // Enables tracking combat
+    facilitycontrol: true, // Enables map tracking
+    vehicledestroy: true, // Enables vehicle destruction tracking
+    populationchange: true, // Enables population numbers tracking provided by Jhett
+    xpmessage: true, // Enables XP tracking (requires more work)
+    classStats: true, // Enables Class Statistitcs tracking
+    achievements: false // Enables Achievement tracking
 };
 
+/**
+ * Allows data dumps for various parts of the script
+ *
+ */
 var debug =
 {
     achievements: false,
