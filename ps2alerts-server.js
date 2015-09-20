@@ -20,16 +20,12 @@ var notice = clc.blueBright;
 var success = clc.green.bold;
 var usage = require('usage');
 var pid = process.pid; // you can use any valid PID instead
-
 var nodemailer = require('nodemailer');
 
-if (ServerSmash === 0)
-{
-    var serverPort = 1337;
-}
-else
-{
-    var serverPort = 1338;
+var serverPort = 1337; // Port to connect clients to the websocket service
+
+if (ServerSmash === 1) {
+    serverPort = 1338;
 }
 
 // create reusable transporter object using SMTP transport
