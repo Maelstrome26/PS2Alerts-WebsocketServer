@@ -1604,18 +1604,22 @@ function updateAlert(message, resultID, callback)
             updateMapData(message, resultID, 0, dbConnectionMap, function()
             {
                 dbConnectionMap.release();
-            })
+            });
         });
     }
 }
 
 function updateMapData(message, resultID, insert, dbConnectionMap, callback)
 {
-    if (message.facility_id) // If Valid
+    if (message.facility_id && message.is_block_update === "0") // If Valid
     {
+        if (debug.facility === true) {
+            console.log(notice(JSON.stringify(message, null, 4)));
+        }
+
         var defence = 0;
 
-        if (message.new_faction_id == message.old_faction_id)
+        if (message.is_capture === "0")
         {
             defence = 1;
             console.log("DEFENCE!");
@@ -6046,24 +6050,29 @@ function checkDuplicateMessages(message, callback)
         {
             var timestamp = message.payload.timestamp;
             var facilityID = message.payload.facility_id;
+            var blockUpdate = message.payload.is_block_update;
 
             if (debug.duplicates === true)
             {
                 console.log(warning("Checking Facility: "+facilityID+" for duplicates"));
             }
 
-            if (messagesDuplicates.FacilityControl[facilityID] === undefined)
-            {
-                messagesDuplicates.FacilityControl[facilityID] =
-                {
-                    timestamp: timestamp
-                };
-
+            if (blockUpdate === "1") {
                 status = true;
-            }
-            else if (messagesDuplicates.FacilityControl[facilityID].timestamp == timestamp) // If a duplicate based off timestamp
-            {
-                status = false;
+            } else {
+                if (messagesDuplicates.FacilityControl[facilityID] === undefined)
+                {
+                    messagesDuplicates.FacilityControl[facilityID] =
+                    {
+                        timestamp: timestamp
+                    };
+
+                    status = true;
+                }
+                else if (messagesDuplicates.FacilityControl[facilityID].timestamp == timestamp) // If a duplicate based off timestamp
+                {
+                    status = false;
+                }
             }
         }
         else if (eventType == "VehicleDestroy")
