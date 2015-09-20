@@ -26,7 +26,7 @@ var nodemailer = require('nodemailer');
  * USER DEFINED SETTINGS
  */
 
-//SOE Census Service ID
+// DBG Census Service ID
 var serviceID = 'yourcensusserviceid'; // Census Service serviceID
 
 var dbUser = 'dbuser';
@@ -65,7 +65,7 @@ if (ServerSmash === 1) {
     serverPort = 1338;
 }
 
-// create reusable transporter object using SMTP transport
+// Transport enabling nodemailer to send errors to you.
 var transporter = nodemailer.createTransport({
     service: 'Gmail',
     auth: {
