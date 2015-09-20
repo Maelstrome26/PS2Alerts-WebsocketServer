@@ -170,6 +170,7 @@ function checkAPIKey(APIKey, callback)
 
 generate_weapons(function() // Generate weapons first, before loading websocket
 {
+    console.log("WEAPONS READY!");
     conWatcherInterval = setInterval(function() //You can change this if you want to reconnect faster, or slower.
     {
         conWatcher();
@@ -191,6 +192,7 @@ generate_weapons(function() // Generate weapons first, before loading websocket
 **************/
 function persistentClient(wss)
 {
+    console.log("HOUSTON WE ARE A GO!");
     var connected = true;
 
     //Return Status of connection.
@@ -211,9 +213,13 @@ function persistentClient(wss)
         }
     };
 
+    console.log("Connecting Client...");
+
     client = new WebSocket('ws://push.api.blackfeatherproductions.com/?apikey='+config.extendedAPIKey); // Jhett's API
 
-    //Events
+    console.log(client);
+
+    // Websocket Event callbacks
     client.on('open', function()
     {
         console.log(success("CONNECTED"));
@@ -3135,7 +3141,7 @@ function sendResult(messageType, message, resultID) // Sends message to WS Clien
                 });
             }
 
-        if (debug == 1 && messageType != "keepalive")
+        if (config.debug.keepalive === true && messageType != "keepalive")
         {
             console.log(notice("Message Sent to Result Websockets"));
         }
@@ -3175,7 +3181,7 @@ function sendMonitor(messageType, message) // Sends message to WS Clients
             });
         }
 
-        if (debug == 1 && messageType != "keepalive")
+        if (config.debug.keepalive === true && messageType != "keepalive")
         {
             console.log(notice("Message Sent to Monitor Websockets"));
         }
@@ -5165,7 +5171,7 @@ setInterval(function()
 
 function checkDuplicateMessages(message, callback)
 {
-    if (debug == 1)
+    if (config.debug.duplicates)
     {
         console.log(warning("CHECKING FOR DUPLICATES START"));
         console.log(warning(JSON.stringify(message, null, 4)));
