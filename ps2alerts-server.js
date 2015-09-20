@@ -23,6 +23,15 @@ var pid = process.pid; // you can use any valid PID instead
 
 var nodemailer = require('nodemailer');
 
+if (ServerSmash === 0)
+{
+    var serverPort = 1337;
+}
+else
+{
+    var serverPort = 1338;
+}
+
 // create reusable transporter object using SMTP transport
 var transporter = nodemailer.createTransport({
     service: 'Gmail',
@@ -6219,18 +6228,9 @@ var resultSubscriptions = {}; // Stores all connections on a per-alert basis
 
 var WebSocketServer = require('ws').Server;
 
-if (ServerSmash == 0)
-{
-    var port = 1337;
-}
-else
-{
-    var port = 1338;
-}
-
 var wss = new WebSocketServer(
 {
-    port: port,
+    port: serverPort,
     clientTracking: false, //We do our own tracking.
 });
 
