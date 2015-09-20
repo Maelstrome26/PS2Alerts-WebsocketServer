@@ -29,10 +29,10 @@ var supplementalConfig = configStore.getSupplementalConfig();
 // Main Database Pool
 var pool = mysql.createPool({
     connectionLimit: 500,
-    host: config.database.primary.dbHost,
-    user: config.database.primary.dbUser,
-    password: config.database.primary.dbPass,
-    database: config.database.primary.dbName,
+    host: config.database.primary.host,
+    user: config.database.primary.user,
+    password: config.database.primary.pass,
+    database: config.database.primary.name,
     waitForConnections: true, // Flag to throw errors when connections are being starved.
     supportBigNumbers: true,
     bigNumberStrings: true
@@ -41,10 +41,10 @@ var pool = mysql.createPool({
 // Cache pool
 var cachePool = mysql.createPool({
     connectionLimit: 20,
-    host: config.database.cache.dbHost,
-    user: config.database.cache.dbUser,
-    password: config.database.cache.dbPass,
-    database: config.database.cache.dbHost,
+    host: config.database.cache.host,
+    user: config.database.cache.user,
+    password: config.database.cache.pass,
+    database: config.database.cache.name,
     waitForConnections: true,
     supportBigNumbers: true,
     bigNumberStrings: true
