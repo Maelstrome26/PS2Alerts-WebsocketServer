@@ -22,6 +22,43 @@ var usage = require('usage');
 var pid = process.pid; // you can use any valid PID instead
 var nodemailer = require('nodemailer');
 
+/**
+ * USER DEFINED SETTINGS
+ */
+
+//SOE Census Service ID
+var serviceID = 'yourcensusserviceid'; // Census Service serviceID
+
+var dbUser = 'dbuser';
+var dbHost = '123.457.789.0';
+var dbPass = 'dbpass';
+var dbName = 'database';
+var dbConnections = 500;
+
+// Main Database Pool
+var pool = mysql.createPool({
+    connectionLimit: 500,
+    host: dbHost,
+    user: dbUser,
+    password: dbPass,
+    database: dbName,
+    waitForConnections: true, // Flag to throw errors when connections are being starved.
+    supportBigNumbers: true,
+    bigNumberStrings: true
+});
+
+// Cache pool
+var cachePool = mysql.createPool({
+    connectionLimit: 20,
+    host: dbHost,
+    user: dbUser,
+    password: dbPass,
+    database: 'ps2alerts_data', // You should be able to find a dump of this in the Websocket Rep.
+    waitForConnections: true, // Flag to throw errors when connections are being starved.
+    supportBigNumbers: true,
+    bigNumberStrings: true
+});
+
 var serverPort = 1337; // Port to connect clients to the websocket service
 
 if (ServerSmash === 1) {
@@ -122,53 +159,6 @@ var debug =
     weapons: true,
     xpmessage: false,
 };
-
-//SOE Census Service ID
-var serviceID = 'yourcensusserviceid'; // Census Service serviceID
-
-if (ServerSmash === 0)
-{
-    console.log(success("=========== PS2ALERTS MODE ============"));
-    var pool = mysql.createPool(
-    {
-        connectionLimit: 500,
-        host: '123.456.789.0',
-        user: 'dbuser',
-        password: 'dbpass',
-        database: 'dbname',
-        waitForConnections: true, // Flag to throw errors when connections are being starved.
-        supportBigNumbers: true,
-        bigNumberStrings: true
-    });
-}
-else if (ServerSmash == 1)
-{
-    console.log(success("=========== SERVERSMASH MODE ============"));
-    var pool = mysql.createPool(
-    {
-        connectionLimit: 500,
-        host: '123.456.789.0',
-        user: 'dbuser',
-        password: 'dbpass',
-        database: 'dbname',
-        waitForConnections: true, // Flag to throw errors when connections are being starved.
-        supportBigNumbers: true,
-        bigNumberStrings: true
-    });
-}
-
-var cachePool = mysql.createPool(
-{
-    connectionLimit: 20,
-    host: '123.456.789.0',
-    user: 'dbuser',
-    password: 'dbpass',
-    database: 'ps2alerts_data', // You should be able to find a dump of this in the Websocket Rep.
-    waitForConnections: true, // Flag to throw errors when connections are being starved.
-    supportBigNumbers: true,
-    bigNumberStrings: true
-});
-
 
 //-------------------------------------------------------------------
 /**
