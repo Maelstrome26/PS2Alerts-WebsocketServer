@@ -28,7 +28,7 @@ var supplementalConfig = configStore.getSupplementalConfig();
 
 // Main Database Pool
 var pool = mysql.createPool({
-    connectionLimit: 500,
+    connectionLimit: 700,
     host: config.database.primary.host,
     user: config.database.primary.user,
     password: config.database.primary.pass,
