@@ -1029,11 +1029,10 @@ function insertAlert(message, typeData, client, dbConnectionA, callback)
             {
                 if (err)
                 {
-                    if (err.errno !== 1062) // If not a duplicate
+                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                     {
                         console.log(message);
                         reportError(err, "Insert Capture Record");
-                        throw(err);
                     }
                     else
                     {
@@ -1780,14 +1779,12 @@ function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
                 {
                     if (err)
                     {
-                        if (err.errno !== 1062) // If not a duplicate
+                        if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                         {
-                            reportError(err, "Insert Weapon Stats Totals");
+                            reportError(err, "Insert Weapon Stats Totals - Deadlock");
                             console.log(weaponTArray);
-                            throw(err);
-
                         }
-                        else // If a duplicate
+                        else if (err.errno === 1062) // If a duplicate
                         {
                             if (config.debug.databaseWarnings === true)
                             {
@@ -1832,13 +1829,12 @@ function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
                         {
                             if (err)
                             {
-                                if (err.errno !== 1062) // If not a duplicate
+                                if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                 {
                                     reportError(err, "Insert Weapon Stats");
                                     console.log(weaponArray);
-                                    throw(err);
                                 }
-                                else // If a duplicate
+                                else
                                 {
                                     if (config.debug.databaseWarnings === true)
                                     {
@@ -2040,16 +2036,15 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                 {
                     if (err)
                     {
-                        if (err.errno !== 1062) // If not a duplicate
+                        if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                         {
                             reportError(err, "Insert Initial Player Kill Stats");
-                            throw(err);
                         }
-                        else // If a duplicate
+                        else
                         {
                             if (config.debug.duplicates === true)
                             {
-                                console.log(warning("DUPLICATED PLAYER DEATH RECORD DETECTED"));
+                                console.log(warning("DUPLICATED / DEADLOCK PLAYER DEATH RECORD DETECTED"));
                                 reportError(err, "Insert Players Attacker Duplicated");
                             }
 
@@ -2087,10 +2082,13 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                     {
                         if(err)
                         {
-                            if (err.errno != 1062) // If not a duplicate
+                            if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                             {
-                                reportError(err, "Insert Initial Player Total Stats (Attacker)");
-                                throw(err);
+                                reportError(err, "Insert Initial Player Total Stats (Attacker)", 0);
+                            }
+                            else
+                            {
+                                handleDeadlock(updateTotalQuery, "Insert Initial Player Total Stats (attacker)");
                             }
                         }
                     });
@@ -2099,7 +2097,6 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
 
             if (attackerID != victimID) // Don't count them twice!
             {
-
                 var victimUpdateQuery = 'UPDATE ws_players SET '+vDeathQuery+' WHERE playerID="'+victimID+'" AND resultID='+resultID;
 
                 if (config.debug.combat === true)
@@ -2137,12 +2134,11 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                             {
                                 if (err)
                                 {
-                                    if (err.errno != 1062) // If not a duplicate
+                                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                     {
                                         reportError(err, "Insert Initial Player Death Stats");
-                                        throw(err);
                                     }
-                                    else // If a duplicate
+                                    else
                                     {
                                         if (config.debug.duplicates === true)
                                         {
@@ -2184,10 +2180,13 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                         {
                             if(err)
                             {
-                                if (err.errno != 1062) // If not a duplicate
+                                if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                 {
                                     reportError(err, "Insert Initial Player Total Death Stats");
-                                    throw(err);
+                                }
+                                else
+                                {
+                                    handleDeadlock(victimUpdateQuery, "Insert Initial Player Total Death Stats");
                                 }
                             }
                         });
@@ -2280,7 +2279,6 @@ function batchUpdateXpTotals(callback)
         Object.keys(xpTotalsUpdates).forEach(function(xpType)
         {
             var object = clone(xpTotalsUpdates);
-            delete xpTotalsUpdates;
 
             var updateTotalsQuery = 'UPDATE ws_xp_totals SET occurances=occurances+'+object[xpType]+' WHERE type = '+xpType;
 
@@ -2293,7 +2291,7 @@ function batchUpdateXpTotals(callback)
             {
                 if (err)
                 {
-                    if (err.errno == 1213) // If deadlock
+                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                     {
                         handleDeadlock(updateTotalsQuery, "XP Update Totals", 0);
                     }
@@ -2316,14 +2314,13 @@ function batchUpdateXpTotals(callback)
                     {
                         if (err)
                         {
-                            if (err.errno == 1213 || err.errno == 1062) // If deadlock
-                            {
-                                handleDeadlock(updateTotalsQuery, "XP Update", 0);
-                            }
-                            else if (err)
+                            if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                             {
                                 reportError(err, "Insert XP Stats record Totals (#"+resultID+")");
-                                throw(err);
+                            }
+                            else
+                            {
+                                handleDeadlock(updateTotalsQuery, "XP Update", 0);
                             }
                         }
                     });
@@ -2382,9 +2379,13 @@ function batchUpdateOutfitTotals(callback)
                         {
                             if (err)
                             {
-                                if (err.errno != 1062) // If not a duplicate
+                                if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                 {
                                     reportError(err, "Insert Outfit Stats");
+                                }
+                                else
+                                {
+                                    handleDeadlock(updateOutfitAlert, "Insert outfit stats");
                                 }
                             }
                         });
@@ -2417,9 +2418,13 @@ function batchUpdateOutfitTotals(callback)
                             {
                                 if(err)
                                 {
-                                    if (err.errno != 1062) // If not a duplicate
+                                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                     {
                                         reportError(err, "Insert Initial Outfit Total Stats (Attacker)");
+                                    }
+                                    else
+                                    {
+                                        handleDeadlock(updateOutfitTotals, "Insert initial outfit total stats (attacker)");
                                     }
                                 }
                             });
@@ -2456,14 +2461,13 @@ function batchUpdateClassTotals(callback)
                 {
                     if (err)
                     {
-                        if (err.errno == 1213) // If deadlock
+                        if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                         {
-                            handleDeadlock(updateLoadoutQuery, "Class Attacker Update", 0);
+                            reportError(err, "Unable to update class row");
                         }
                         else if (err)
                         {
-                            reportError(err, "Unable to update class row");
-                            throw(err);
+                            handleDeadlock(updateLoadoutQuery, "Class Attacker Update", 0);
                         }
                     }
                     else if (result.affectedRows === 0) // If missing record
@@ -2487,10 +2491,13 @@ function batchUpdateClassTotals(callback)
                         {
                             if (err)
                             {
-                                if(err.errno != 1062)
+                                if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                 {
                                     reportError(err, "Unable to insert class attacker");
-                                    throw(err);
+                                }
+                                else
+                                {
+                                    handleDeadlock(updateLoadoutQuery, "Class attacker");
                                 }
                             }
                         });
@@ -2514,14 +2521,13 @@ function batchUpdateClassTotals(callback)
                     {
                         if (err)
                         {
-                            if (err.errno == 1213) // If deadlock
+                            if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                             {
-                                handleDeadlock(updatePlayerLoadoutQuery, "Class Player Totals Attacker Update", 0);
+                                reportError(err, "Unable to update Class Player Totals row");
                             }
                             else if (err)
                             {
-                                reportError(err, "Unable to update Class Player Totals row");
-                                throw(err);
+                                handleDeadlock(updatePlayerLoadoutQuery, "Class Player Totals Attacker Update", 0);
                             }
                         }
                         else if (result.affectedRows === 0) // If missing record
@@ -2546,10 +2552,13 @@ function batchUpdateClassTotals(callback)
                             {
                                 if (err)
                                 {
-                                    if(err.errno != 1062)
+                                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                     {
                                         reportError(err, "Unable to insert Class Player Totals");
-                                        throw(err);
+                                    }
+                                    else
+                                    {
+                                        handleDeadlock(updatePlayerLoadoutQuery, "Update Player Loadout");
                                     }
                                 }
                             });
@@ -2854,14 +2863,13 @@ function insertExperience(message, resultID, dbConnectionXP, callback)
                 {
                     if (err)
                     {
-                        if (err.errno == 1213 || err.errno == 1062) // If deadlock
+                        if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                         {
-                            handleDeadlock(updateQuery, "XP Update", 0);
+                            reportError(err, "Insert XP Stats record (#"+resultID+")");
                         }
                         else if (err)
                         {
-                            reportError(err, "Insert XP Stats record (#"+resultID+")");
-                            throw(err);
+                            handleDeadlock(updateQuery, "XP Update", 0);
                         }
                     }
                     else // Fire the query that was going to happen
@@ -2990,14 +2998,13 @@ function insertAchievement(message, resultID, dbConnectionCheevo, callback)
     {
         if (err)
         {
-            if (err.errno == 1213) // If deadlock
+            if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
             {
-                handleDeadlock(updateCheevoQuery, "Achievement Update", 0);
+                reportError(err, "Unable to update achievement");
             }
             else if (err)
             {
-                reportError(err, "Unable to update achievement");
-                throw(err);
+                handleDeadlock(updateCheevoQuery, "Achievement Update", 0);
             }
         }
 
@@ -3020,13 +3027,13 @@ function insertAchievement(message, resultID, dbConnectionCheevo, callback)
             {
                 if (err)
                 {
-                    if (err.errno == 1213 || err.errno == 1062) // If deadlock
+                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                     {
-                        handleDeadlock(updateCheevoQuery, "Insert Achivement", 0);
+                        reportError(err, "Insert Achievements Stats record (#"+resultID+")");
                     }
                     else
                     {
-                        reportError(err, "Insert Achievements Stats record (#"+resultID+")");
+                        handleDeadlock(updateCheevoQuery, "Insert Achivement", 0);
                     }
                 }
             });
@@ -3074,13 +3081,13 @@ function insertPopulationStats(resultID, dbConnectionPopulation, callback)
             {
                 if (err)
                 {
-                    if(err.errno == 1213 || err.errno == 1062)
+                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                     {
-
+                        reportError(err, "Insert Population Stats");
                     }
                     else
                     {
-                        reportError(err, "Insert Population Stats");
+                        reportError(err, "Insert Popualtion Stats (Non deadlock)");
                     }
                 }
                 else
@@ -3089,7 +3096,6 @@ function insertPopulationStats(resultID, dbConnectionPopulation, callback)
                 }
             });
         }
-
     }
     else
     {
@@ -3555,10 +3561,9 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
                         {
                             if (err)
                             {
-                                if (err.errno != 1062) // If not a duplicate
+                                if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                 {
                                     reportError(err, "Insert Player Cache Record");
-                                    throw(err);
                                 }
                                 else
                                 {
@@ -3665,11 +3670,9 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
                                 {
                                     if (err)
                                     {
-                                        if (err.errno != 1062) // If not a duplicate
+                                        if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                         {
-                                            console.log(message);
                                             reportError(err, "Insert Outfit Cache Record");
-                                            throw(err);
                                         }
                                         else
                                         {
@@ -4170,7 +4173,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     {
                         if (err)
                         {
-                            if (err.errno == 1213) // If deadlock
+                            if (err.errno === 1213) // If deadlock
                             {
                                 handleDeadlock("UPDATE ws_vehicles_totals SET "+Kquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, "Vehicle Update", 0);
                             }
@@ -4198,7 +4201,6 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                     {
                                         console.log(message);
                                         reportError(err, "Insert Player Cache Record");
-                                        throw(err);
                                     }
                                 }
                             });
@@ -4209,7 +4211,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     {
                         if (err)
                         {
-                            if (err.errno == 1213) // If deadlock
+                            if (err.errno === 1213) // If deadlock
                             {
                                 handleDeadlock("UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID, "Vehicle Update", 0);
                             }
@@ -4245,7 +4247,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                     {
                                         if (err)
                                         {
-                                            if (err.errno == 1213) // If deadlock
+                                            if (err.errno === 1213) // If deadlock
                                             {
                                                 console.log(critical("DEADLOCK DETECTED (Vehicles Kill)"));
 
@@ -4265,7 +4267,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     {
                         if (err)
                         {
-                            if (err.errno == 1213) // If deadlock
+                            if (err.errno === 1213) // If deadlock
                             {
                                 console.log(critical("DEADLOCK DETECTED (Vehicles)"));
 
@@ -4318,7 +4320,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     {
                         if (err)
                         {
-                            if (err.errno == 1213) // If deadlock
+                            if (err.errno === 1213) // If deadlock
                             {
                                 handleDeadlock("UPDATE ws_vehicles SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, "Vehicle Update", 0);
                             }
@@ -4968,11 +4970,9 @@ function combatHistory() // Called by generateActives function to log active ale
                             {
                                 if (err)
                                 {
-                                    if (err.errno != 1062) // If not a duplicate
+                                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                     {
-                                        console.log(message);
                                         reportError(err, "Insert Combat Record");
-                                        throw(err);
                                     }
                                 }
 
@@ -5013,7 +5013,7 @@ function handleDeadlock(query, location, tries)
                 {
                     if (err)
                     {
-                        if (err.errno == 1213) // If deadlock
+                        if (err.errno === 1213) // If deadlock
                         {
                             handleDeadlock(query, location, tries); // Call upon itself to try again.
                         }
