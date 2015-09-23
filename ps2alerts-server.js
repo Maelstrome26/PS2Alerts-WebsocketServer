@@ -4887,42 +4887,6 @@ function generate_weapons(callback)
     });
 }
 
-function recordMessage(messageData, dbConnection)
-{
-    var message;
-
-    try // Check if the message we get is valid json.
-    {
-        message = JSON.parse(messageData);
-    }
-    catch(exception)
-    {
-        message = null;
-    }
-
-    if (message)
-    {
-        var JSONMessage = JSON.stringify(message);
-
-        var array =
-        {
-            message: JSONMessage,
-            type: message.messageType
-        };
-
-        dbConnection.query('INSERT INTO ws_recorded SET ?', array, function(err, result)
-        {
-            if (err)
-            {
-                throw(err);
-            }
-            else
-            {
-                //console.log("Inserted Message");
-            }
-        });
-    }
-}
 
 var combatHistoryProcessed = {};
 
