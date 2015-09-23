@@ -1545,7 +1545,7 @@ function combatParse(message, resultID, dbConnectionCache)
             {
                 combatArray.aOutfit = {};
 
-                if (aoutfitName !== undefined) // If returned
+                if (aoutfitName != undefined) // If returned
                 {
                     combatArray.aOutfit = {};
                     combatArray.aOutfit.id = aoutfitID;
@@ -1569,7 +1569,7 @@ function combatParse(message, resultID, dbConnectionCache)
 
                 checkOutfitCache(message.victim_outfit_id, message.world_id, dbConnectionCache, function(voutfitName, voutfitTag, voutfitFaction, voutfitID)
                 {
-                    if (voutfitName !== undefined) // If returned
+                    if (voutfitName != undefined) // If returned
                     {
                         combatArray.vOutfit = {};
                         combatArray.vOutfit.id = voutfitID;
@@ -2018,7 +2018,6 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
         {
             if (resultA.affectedRows === 0) // If new record for Attacker
             {
-
                 var playerArrayKills = {
                     resultID: resultID,
                     playerID: attackerID,
