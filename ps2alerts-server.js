@@ -1949,13 +1949,13 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
 
     var vDeathQuery = 'playerDeaths=playerDeaths+1';
 
-    if (combatArray.headshot == 1)
+    if (combatArray.headshot == "1")
     {
         aKillQuery = 'playerKills=playerKills+1, ';
         headshotQuery = 'headshots=headshots+1';
     }
 
-    if (combatArray.teamkill == 1) // If a TK
+    if (combatArray.teamkill == "1") // If a TK
     {
         aKillQuery = '';
         teamKill = 1;
@@ -1966,12 +1966,12 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
             console.log("TEAM KILL - Player");
         }
 
-        if (combatArray.headshot == 1)
+        if (combatArray.headshot == "1")
         {
             headshotQuery = 'headshots=headshots+1, ';
         }
     }
-    else if (combatArray.suicide == 1) // Is it a suicie?
+    else if (combatArray.suicide == "1") // Is it a suicie?
     {
         aKillQuery = '';
         aDeathQuery = 'playerDeaths=playerDeaths+1, ';
@@ -1988,12 +1988,12 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
     var playerKills = 1;
     var playerDeaths = 0;
 
-    if (teamKill === 1)
+    if (teamKill == "1")
     {
         playerKills = 0;
     }
 
-    if (suicide === 1)
+    if (suicide == "1")
     {
         playerDeaths = 1;
         playerKills = 0;
@@ -3607,14 +3607,14 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
 
 function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
 {
-    if (config.debug.census === true)
+    if (config.debug.cache === true)
     {
         console.log(critical("OUTFIT ID: "+outfitID));
     }
 
-    if ((outfitID == -1) || (outfitID === 0))
+    if ((outfitID == -1) || (outfitID == "0"))
     {
-        if (config.debug.census === true)
+        if (config.debug.cache === true)
         {
             console.log(critical("IGNORING OUTFIT PROCESSING"));
         }
@@ -3631,7 +3631,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
             }
             else
             {
-                if (config.debug.census === true)
+                if (config.debug.cache === true)
                 {
                     console.log(notice("OUTFIT CACHE RESULT: " + JSON.stringify(result[0], null, 4)));
                 }
@@ -3640,7 +3640,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
                 {
                     findOutfitName(outfitID, worldID, function(outfitName, tag, leaderID)
                     {
-                        if (config.debug.census === true)
+                        if (config.debug.cache === true)
                         {
                             console.log("FOUND OUTFIT NAME");
                         }
@@ -3683,7 +3683,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
                                     }
                                     else
                                     {
-                                        if (config.debug.outfits === true)
+                                        if (config.debug.cache === true)
                                         {
                                             console.log(success("INSERTED OUTFIT RECORD INTO CACHE TABLE"));
                                         }
