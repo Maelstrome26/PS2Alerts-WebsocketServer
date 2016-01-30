@@ -1071,7 +1071,7 @@ function insertAlert(message, typeData, client, dbConnectionA, callback)
                         "controlVS": message.control_vs,
                         "controlNC": message.control_nc,
                         "controlTR": message.control_tr,
-                        "remaining": 7200
+                        "remaining": 5400
                     };
 
                     console.log(critical("Sending Websocket Message: "));
@@ -5299,7 +5299,7 @@ function calcEndTime(started, type) // Calculates estimated end time of an alert
         case "3":
         case "4":
         {
-            var toAdd = 7200;
+            var toAdd = 5400;
         }
     }
 
