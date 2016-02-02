@@ -5765,3 +5765,66 @@ var maintenance = setInterval(function()
     });
 
 }, maintTimer);
+
+setInterval(function() {
+    console.log('Firing Check Census');
+    checkCensusForAlerts('pc');
+}, 60000);
+
+checkCensusForAlerts('pc');
+
+function checkCensusForAlerts(type) {
+    var url = null;
+    if (type === 'ps4eu') {
+        url = "http://census.daybreakgames.com/s:"+config.serviceID+"/get/ps2ps4eu:v2/world_event?type=METAGAME";
+    } else if (type === 'ps4us') {
+        url = "http://census.daybreakgames.com/s:"+config.serviceID+"/get/ps2ps4us:v2/world_event?type=METAGAME";
+    } else if (type === 'pc') {
+        url = "http://census.daybreakgames.com/s:"+config.serviceID+"/get/ps2:v2/world_event?type=METAGAME";
+    }
+
+    if (url !== null) {
+        if (config.debug.census === true) {
+            console.log("========== SYNCING ALERTS WITH CENSUS =========");
+        }
+
+        http.get(url, function(res) {
+            var body = '';
+
+            res.on('data', function(chunk) {
+                body += chunk;
+            });
+
+            res.on('end', function() {
+
+                var success = 1;
+                var returned;
+
+                try {
+                    returned = JSON.parse(body);
+                } catch(exception) {
+                    console.log(critical("BAD RETURN FROM CENSUS - WOrld Events"));
+                    console.log(url);
+                    console.log(body);
+                    success = 0;
+                }
+
+                if (returned === undefined) {
+                    success = 0;
+                    console.log(critical("CENSUS NO DATA!"));
+                    console.log(notice("QUERY: "+url));
+                }
+
+                if (success === 1) {
+                    if (returned.world_event_list !== undefined) {
+                        Object.keys(returned.world_event_list).forEach(function(i) {
+                            var alert = returned.world_event_list[i];
+                            console.log(JSON.stringify(alert, null, 4));
+                            console.log(alert.world_id);
+                        });
+                    }
+                }
+            });
+        });
+    }
+}
