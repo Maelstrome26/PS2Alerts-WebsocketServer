@@ -1066,8 +1066,9 @@ function insertAlert(message, typeData, client, dbConnectionA, callback)
                         "controlVS": message.control_vs,
                         "controlNC": message.control_nc,
                         "controlTR": message.control_tr,
-                        "remaining": 5400
                     };
+
+                    toSend.remaining = (parseInt(toSend.endTime) - parseInt(toSend.startTime));
 
                     console.log(critical("Sending Websocket Message: "));
                     console.log(critical(JSON.stringify(toSend, null, 4)));
