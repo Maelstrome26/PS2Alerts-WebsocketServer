@@ -49,5 +49,5 @@ pws.init();
 // });
 
 // lineReader.on('close', function(){
-//     console.log(`Number of service messages: ${routerPush.number_service_messages()} / ${routerPush.number_messages()}`);    
+//     console.log(`Number of service messages: ${routerPush.number_service_messages()} / ${routerPush.number_messages()}`);
 // });
