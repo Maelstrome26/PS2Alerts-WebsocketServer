@@ -1,0 +1,28 @@
+{
+  "name": "ps2alerts-websocket",
+  "version": "0.0.0",
+  "description": "The websocket collection script that powers PS2Alerts.com.",
+  "main": "config.js",
+  "bin": {
+    "ps2alerts-websocket": "main.js"
+  },
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://Maelstrome26@github.com/Maelstrome26/ps2alerts-ws.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Maelstrome26/ps2alerts-ws/issues"
+  },
+  "homepage": "https://github.com/Maelstrome26/ps2alerts-ws",
+  "dependencies": {
+    "ws": "^1.0.1"
+  }
+}
