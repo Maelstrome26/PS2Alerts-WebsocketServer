@@ -54,6 +54,7 @@ var config = {
         responses: false,
         resultID: true,
         status: true,
+        sync: false,
         time: false,
         upcoming: true,
         vehicles: false,
