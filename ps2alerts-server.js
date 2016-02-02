@@ -1238,7 +1238,6 @@ function endAlert(message, resultID, client, dbConnectionA, callback)
                                                 delete populationInstances[resultID];
                                                 delete instances[resultID];
 
-                                                hydrateResult(resultID);
                                                 callback(resultID);
                                             }
                                         });
@@ -4628,29 +4627,6 @@ function checkInstances(callback)
     });
 
     callback();
-}
-
-function hydrateResult(resultID)
-{
-    console.log("HYDRATING RESULT: "+resultID);
-
-     var options = {
-        hostname: "dev.ps2alerts.com",
-        port: 80,
-        method: 'GET',
-        path: '/alert/'+resultID
-    };
-
-    var req = http.request(options, function()
-    {
-        req.end();
-
-        console.log(success("SUCCESSFULLY HYDRATED ALERT #"+resultID));
-    });
-
-    req.on('error', function(e) {
-        console.error(e);
-    });
 }
 
 function resetConnection()
