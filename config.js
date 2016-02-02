@@ -33,6 +33,4 @@ let config = {
     }
 };
 
-console.log("New config! %j", config);
-
 module.exports = config;
