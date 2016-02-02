@@ -1063,15 +1063,15 @@ function insertAlert(message, typeData, client, dbConnectionA, callback)
 
                     var toSend =
                     {
-                        "timestamp": message.start_time,
-                        "endtime": endtime,
+                        "startTime": message.start_time,
+                        "endTime": endtime,
                         "world": world,
                         "zone": zone,
                         "resultID": resultID,
                         "controlVS": message.control_vs,
                         "controlNC": message.control_nc,
                         "controlTR": message.control_tr,
-                        "remaining": 7200
+                        "remaining": 5400
                     };
 
                     console.log(critical("Sending Websocket Message: "));
@@ -1218,7 +1218,7 @@ function endAlert(message, resultID, client, dbConnectionA, callback)
                                                     var toSend =
                                                     {
                                                         "resultID": resultID,
-                                                        "endtime": message.end_time,
+                                                        "endTime": message.end_time,
                                                         "winner": winner,
                                                         "controlVS": instances[resultID].controlVS,
                                                         "controlNC": instances[resultID].controlNC,
@@ -4578,7 +4578,7 @@ var forcedEndings = 0;
 // Loop through instances checking that they're valid and are not due to be ending
 function checkInstances(callback)
 {
-    var time = new Date().getTime() + 10;
+    var time = new Date().getTime();
     time = parseInt(time / 1000); // To convert to seconds
 
     pool.getConnection(function(poolErr, dbConnection)
@@ -5299,7 +5299,7 @@ function calcEndTime(started, type) // Calculates estimated end time of an alert
         case "3":
         case "4":
         {
-            var toAdd = 7200;
+            var toAdd = 5400;
         }
     }
 
