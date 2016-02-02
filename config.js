@@ -1,23 +1,12 @@
 'use strict';
 
+const userconfig = require('./config.user.js');
+
 let config = {
-    serviceID: 'yourcensusserviceID',
-    extendedAPIKey: 'yougetthisfromjhett12321',
-    serverPort: 1337,
-    database : {
-        primary : {
-            host: '123.456.789.0',
-            user: 'dbUser',
-            pass: 'dbPass',
-            name: 'dbname'
-        },
-        cache : {
-            host: '123.456.789.0',
-            user: 'dbUser',
-            pass: 'dbPass',
-            name: 'dbname'
-        }
-    },
+    censusServiceId: userconfig.censusServiceId,
+    extendedAPIKey: userconfig.extendedAPIKey,
+    serverPort: userconfig.serverPort,
+    database : userconfig.database,
     toggles : {
 
     },
