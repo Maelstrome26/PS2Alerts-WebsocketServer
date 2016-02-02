@@ -1259,7 +1259,7 @@ function endAlert(message, resultID, client, dbConnectionA, callback)
                             }
                         });
                     } else {
-                        reportError("MISSING CAPTURE LOGS. UNABLE TO CALCULATE END OF ALERT.", "End Alert");
+                        reportError("MISSING CAPTURE LOGS. UNABLE TO CALCULATE END OF ALERT #"+resultID, "End Alert");
 
                         console.log(critical("Marking Alert as Invalid"));
 
@@ -4616,7 +4616,7 @@ function checkInstances(callback)
                 endAlert(endmessage, resultID, client, dbConnection, function(resultID)
                 {
                     console.log(critical("FORCFULLY ENDED ALERT #"+resultID+" W: "+world+" - Z:"+zone));
-                    reportError(resultID, "Forced Ended alert #"+resultID);
+                    reportError("Forced Ended alert #"+resultID, "Check Instances");
                 });
             }
 
