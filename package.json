@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/Maelstrome26/ps2alerts-ws",
   "dependencies": {
+    "cli-color": "^1.1.0",
     "ws": "^1.0.1"
   }
 }
