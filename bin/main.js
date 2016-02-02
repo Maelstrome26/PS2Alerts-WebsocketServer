@@ -5,7 +5,7 @@ console.log("Starting collector");
 const routerPush = require('../lib/router_push.js');
 const routerInt = require('../lib/router_internal.js');
 const pf = require('../lib/parsers/parser_facilities.js');
-const pws = require('../lib/push/push_websocket.js');
+const pws = require('../lib/push/censusWebsocketPC.js');
 
 console.log("Importing modules [done]");
 
@@ -51,4 +51,3 @@ pws.init();
 // lineReader.on('close', function(){
 //     console.log(`Number of service messages: ${routerPush.number_service_messages()} / ${routerPush.number_messages()}`);    
 // });
-
