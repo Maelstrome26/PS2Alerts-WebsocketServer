@@ -8,7 +8,6 @@ const pf = require('../lib/parsers/parser_facilities.js')
 
 console.log("Importing modules [done]");
 
-
 // let cp = new CombatParser();
 let modules = [pf];
 
@@ -29,14 +28,12 @@ routerInt.init();
 // Try to register all modules
 for(let m of modules){
     routerPush.registerReceiver(m);
-    routerInt.registerReceiver(m);    
+    routerInt.registerReceiver(m);
 }
-
 
 for(let i = 0; i < messages.length; ++i) {
     routerPush.onmessage(messages[i]);
 }
-
 
 var lineReader = require('readline').createInterface({
   input: require('fs').createReadStream('input1.txt')
@@ -47,7 +44,5 @@ lineReader.on('line', function (line) {
 });
 
 lineReader.on('close', function(){
-    console.log(`Number of service messages: ${routerPush.number_service_messages()} / ${routerPush.number_messages()}`);    
+    console.log(`Number of service messages: ${routerPush.number_service_messages()} / ${routerPush.number_messages()}`);
 });
-
-
