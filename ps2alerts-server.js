@@ -4799,6 +4799,7 @@ function restoreSubs(client, dbConnectionI, callback)
                 var controlVS = resultInstance[i].controlVS;
                 var controlNC = resultInstance[i].controlNC;
                 var controlTR = resultInstance[i].controlTR;
+                var instanceID = resultInstance[i].instanceID;
 
                 var message = {
                     "world_id": world,
@@ -4809,6 +4810,7 @@ function restoreSubs(client, dbConnectionI, callback)
                     "control_vs": controlVS,
                     "control_nc": controlNC,
                     "control_tr": controlTR,
+                    "instance_id":            instanceID
                 };
 
                 // Fake the message to send to the subscriptions function
