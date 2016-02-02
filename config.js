@@ -21,8 +21,8 @@ let config = {
     toggles : {
 
     },
-    debug : {
-
+    debug: {
+        websocketMessage: true
     },
     supplementalConfig: {
         worlds : {
