@@ -11,6 +11,7 @@ let config = {
 
     },
     debug: {
+        censusEvents: true,
         websocketMessage: true
     },
     supplementalConfig: {
