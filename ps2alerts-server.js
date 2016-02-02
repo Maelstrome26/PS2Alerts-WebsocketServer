@@ -4736,17 +4736,19 @@ function setInstances(message, resultID, mode)
 
     if (mode == "subscribe")
     {
-        instances[resultID]           = {};
-        instances[resultID].status    = true;
-        instances[resultID].resultID  = resultID;
-        instances[resultID].startTime = message.start_time;
-        instances[resultID].endTime   = endTime;
-        instances[resultID].type      = type;
-        instances[resultID].world     = world;
-        instances[resultID].zone      = zone;
-        instances[resultID].controlVS = message.control_vs;
-        instances[resultID].controlNC = message.control_nc;
-        instances[resultID].controlTR = message.control_tr;
+        instances[resultID] = {
+            status:     true,
+            resultID:   resultID,
+            startTime:  message.start_time,
+            endTime:    endTime,
+            type:       type,
+            world:      world,
+            zone:       zone,
+            controlVS:  message.control_vs,
+            controlNC:  message.control_nc,
+            controlTR:  message.control_tr,
+            instanceID: message.instance_id
+        };
 
         console.log(success("INSTANCE SUCCESSFULLY CREATED!"));
     }
