@@ -4,7 +4,8 @@ console.log("Starting collector");
 
 const routerPush = require('../lib/router_push.js');
 const routerInt = require('../lib/router_internal.js');
-const pf = require('../lib/parsers/parser_facilities.js')
+const pf = require('../lib/parsers/parser_facilities.js');
+const pws = require('../lib/push/push_websocket.js');
 
 console.log("Importing modules [done]");
 
@@ -32,22 +33,23 @@ for(let m of modules){
     routerInt.registerReceiver(m);    
 }
 
+// Register the push websocket module
+pws.init();
 
-for(let i = 0; i < messages.length; ++i) {
-    routerPush.onmessage(messages[i]);
-}
+// for(let i = 0; i < messages.length; ++i) {
+//     routerPush.onmessage(messages[i]);
+// }
 
 
-var lineReader = require('readline').createInterface({
-  input: require('fs').createReadStream('input1.txt')
-});
+// var lineReader = require('readline').createInterface({
+//   input: require('fs').createReadStream('input1.txt')
+// });
 
-lineReader.on('line', function (line) {
-    routerPush.onrawmessage(line);
-});
+// lineReader.on('line', function (line) {
+//     routerPush.onrawmessage(line);
+// });
 
-lineReader.on('close', function(){
-    console.log(`Number of service messages: ${routerPush.number_service_messages()} / ${routerPush.number_messages()}`);    
-});
-
+// lineReader.on('close', function(){
+//     console.log(`Number of service messages: ${routerPush.number_service_messages()} / ${routerPush.number_messages()}`);    
+// });
 
