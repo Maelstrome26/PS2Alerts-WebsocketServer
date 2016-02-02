@@ -9,7 +9,6 @@ const pws = require('../lib/push/push_websocket.js');
 
 console.log("Importing modules [done]");
 
-
 // let cp = new CombatParser();
 let modules = [pf];
 
@@ -30,7 +29,7 @@ routerInt.init();
 // Try to register all modules
 for(let m of modules){
     routerPush.registerReceiver(m);
-    routerInt.registerReceiver(m);    
+    routerInt.registerReceiver(m);
 }
 
 // Register the push websocket module
