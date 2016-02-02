@@ -401,6 +401,11 @@ function processMessage(messageData, client, wss, dbConnection)
 
     if (message) // If valid
     {
+        if (message.action && message.action == "activeMetagameEvents") {
+            console.log(notice("Sending Actives to processor"));
+            processActives(message);
+        }
+
         var eventType  = message.event_type;
         var eventCheck = eventTypes.indexOf(eventType);
 
@@ -5743,64 +5748,81 @@ var maintenance = setInterval(function()
 }, maintTimer);
 
 setInterval(function() {
-    console.log('Firing Check Census');
-    checkCensusForAlerts('pc');
-}, 60000);
+    console.log('Firing alert sync');
 
-checkCensusForAlerts('pc');
+    var actives = '{"action":"activeMetagameEvents"}'; // Pull a list of all active alerts
 
-function checkCensusForAlerts(type) {
-    var url = null;
-    if (type === 'ps4eu') {
-        url = "http://census.daybreakgames.com/s:"+config.serviceID+"/get/ps2ps4eu:v2/world_event?type=METAGAME";
-    } else if (type === 'ps4us') {
-        url = "http://census.daybreakgames.com/s:"+config.serviceID+"/get/ps2ps4us:v2/world_event?type=METAGAME";
-    } else if (type === 'pc') {
-        url = "http://census.daybreakgames.com/s:"+config.serviceID+"/get/ps2:v2/world_event?type=METAGAME";
+    try {
+        client.send(actives);
+    } catch (e) {
+        reportError("Error: "+e, "Metagame Active Alerts message failed", true);
     }
+}, 5000);
 
-    if (url !== null) {
-        if (config.debug.census === true) {
-            console.log("========== SYNCING ALERTS WITH CENSUS =========");
+function processActives(message) {
+    var data = message.worlds;
+
+    if (config.debug.sync === true) {
+        console.log(JSON.stringify(instances, null, 4));
         }
 
-        http.get(url, function(res) {
-            var body = '';
+    Object.keys(data).forEach(function(world) {
+        Object.keys(data[world].metagame_events).forEach(function(a) {
 
-            res.on('data', function(chunk) {
-                body += chunk;
-            });
+            var instanceFound = false;
+            var alert = data[world].metagame_events[a];
+            var instanceID = alert.instance_id;
 
-            res.on('end', function() {
+            if (config.debug.sync === true) {
+                console.log("Instance ID", instanceID);
+            }
 
-                var success = 1;
-                var returned;
+            // Check for the instanceID in the instances object
+            Object.keys(instances).forEach(function(w) {
+                if (instances[w].instanceID == instanceID) {
 
-                try {
-                    returned = JSON.parse(body);
-                } catch(exception) {
-                    console.log(critical("BAD RETURN FROM CENSUS - WOrld Events"));
-                    console.log(url);
-                    console.log(body);
-                    success = 0;
+                    if (config.debug.sync == true) {
+                        console.log(success("Alert found"));
+                        console.log(notice(JSON.stringify(instances[w], null, 4)));
                 }
 
-                if (returned === undefined) {
-                    success = 0;
-                    console.log(critical("CENSUS NO DATA!"));
-                    console.log(notice("QUERY: "+url));
+                    instanceFound = true;
                 }
-
-                if (success === 1) {
-                    if (returned.world_event_list !== undefined) {
-                        Object.keys(returned.world_event_list).forEach(function(i) {
-                            var alert = returned.world_event_list[i];
-                            console.log(JSON.stringify(alert, null, 4));
-                            console.log(alert.world_id);
                         });
+
+            // If instance was not found, force start
+            if (instanceFound === false) {
+                reportError("Sync detected missed alert! World: "+ world, "Instance Sync");
+
+                delete alert.facilities;
+
+                if (config.debug.sync === true) {
+                    console.log(critical(JSON.stringify(alert, null, 4)));
                     }
-                }
+
+                /**
+                 * message = {
+                 * 		world_id,
+                 * 		zone_id,
+                 * 		metagame_event_type_id,
+                 * 		start_time,
+                 * 		control_vs,
+                 * 		control_nc,
+                 * 		control_tr,
+                 * 		instance_id
+                 * }
+                 */
+
+                alert.world_id = world;
+
+                pool.getConnection(function(err, dbConnection) {
+                    insertAlert(alert, dbConnection, function(resultID) {
+                        console.log(success("================ FORCE STARTED NEW ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
             });
+
+                    dbConnection.release();
         });
     }
-}
+        });
+    });
+};
