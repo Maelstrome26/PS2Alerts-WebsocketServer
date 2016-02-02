@@ -1,4 +1,6 @@
-var config = {
+'use strict';
+
+let config = {
     serviceID: 'yourcensusserviceID',
     extendedAPIKey: 'yougetthisfromjhett12321',
     serverPort: 1337,
@@ -17,52 +19,14 @@ var config = {
         }
     },
     toggles : {
-        metagame: true, // Allows tracking of alerts
-        jaeger: true, // Allows messages from the event server Jaeer.
-        combat: true, // Enables tracking combat
-        facilitycontrol: true, // Enables map tracking
-        vehicledestroy: true, // Enables vehicle destruction tracking
-        populationchange: true, // Enables population numbers tracking provided by Jhett
-        xpmessage: true, // Enables XP tracking (requires more work)
-        classStats: true, // Enables Class Statistitcs tracking
-        achievements: false // Enables Achievement tracking
+
     },
     debug : {
-        achievements: false,
-        actives: true,
-        API: true,
-        auth: false,
-        batch: false,
-        cache: false,
-        census: false,
-        charFlags: false,
-        charID: false,
-        classes: false,
-        clients: false,
-        combat: false,
-        datadump: false,
-        databaseWarnings: true,
-        databaseQuries: true,
-        duplicates: false,
-        facility: false,
-        instances: true,
-        jaeger: true,
-        keepalive: false,
-        metagame: false,
-        perf: false,
-        population: false,
-        responses: false,
-        resultID: true,
-        status: true,
-        time: false,
-        upcoming: true,
-        vehicles: false,
-        weapons: true,
-        xpmessage: false,
+
     }
 };
 
-var supplementalConfig = {
+let supplementalConfig = {
     worlds : {
         1: 'Connery',
         10: 'Miller',
@@ -81,10 +45,15 @@ var supplementalConfig = {
     }
 };
 
-exports.getConfig = function () {
-    return config;
-};
 
-exports.getSupplementalConfig = function () {
-    return supplementalConfig;
+module.exports = {
+    "getConfig": () => {
+        return config;
+    },
+    "getSupplementalConfig": () => {
+        return supplementalConfig;
+    },
+    "getConfigItem": (item) => {
+        return config[item];
+    }
 };
