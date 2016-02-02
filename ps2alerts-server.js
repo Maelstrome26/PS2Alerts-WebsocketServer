@@ -363,16 +363,6 @@ function onConnect(client) // Set up the websocket
                 return false;
             }
         }
-
-        var actives = '{"action":"activeMetagameEvents"}'; // Pull a list of all active alerts
-
-        try {
-            client.send(actives);
-        } catch (e) {
-            reportError("Error: "+e, "Metagame Active Alerts message failed", true);
-        }
-
-        activesNeeded = false;
     }
 
     if (config.debug.instances === true)
@@ -5630,22 +5620,6 @@ setInterval(function()
         }
     });
 }, 1000);
-
-setInterval(function()
-{
-    if (activesNeeded === true)
-    {
-        var actives = '{"action":"activeMetagameEvents"}'; // Pull a list of all active alerts
-
-        try {
-            client.send(actives);
-        } catch (e) {
-            reportError("Error: "+e, "Metagame Active Alerts message failed", true);
-        }
-
-        activesNeeded = false;
-    }
-}, 2000);
 
 cleanCache();
 
