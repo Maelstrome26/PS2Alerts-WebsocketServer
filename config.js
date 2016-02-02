@@ -30,7 +30,10 @@ let config = {
             2000: 'Ceres (PS4EU)',
             2001: 'Lithcorp (PS4EU)',
             2002: 'Rashnu (PS4EU)'
-        }
+        },
+        pcWorlds: [1,10,13,17,25],
+        ps4usWorlds: [1000, 1001],
+        ps4euWorlds: [2000, 2001],
     }
 };
 
