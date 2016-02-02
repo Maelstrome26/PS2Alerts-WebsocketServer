@@ -914,6 +914,10 @@ function reportError(error, loc, severeError)
     });
 }
 
+function resetScript() {
+    process.exit(1);
+};
+
 /**
  * message = {
  * 		world_id,
