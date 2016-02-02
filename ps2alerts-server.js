@@ -448,7 +448,7 @@ function processMessage(messageData, client, wss, dbConnection)
                                             if (resultIDArray.length === 0)
                                             {
                                                 console.log(success("================== STARTING ALERT! =================="));
-                                                insertAlert(message, typeData, client, dbConnection, function(resultID)
+                                                insertAlert(message, dbConnection, function(resultID)
                                                 {
                                                     console.log(success("================ INSERTED NEW ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
                                                 });
@@ -914,7 +914,20 @@ function reportError(error, loc, severeError)
     });
 }
 
-function insertAlert(message, typeData, client, dbConnectionA, callback)
+/**
+ * message = {
+ * 		world_id,
+ * 		zone_id,
+ * 		metagame_event_type_id,
+ * 		start_time,
+ * 		control_vs,
+ * 		control_nc,
+ * 		control_tr,
+ * 		instance_id
+ * }
+ */
+
+function insertAlert(message, dbConnectionA, callback)
 {
     console.log(notice("ALERT MESSAGE FOLLOWS:"));
     console.log(message);
@@ -4774,26 +4787,26 @@ function restoreSubs(client, dbConnectionI, callback)
         {
             if (resultInstance[i].started < time) // If it requires a subscription now
             {
-                var world     = String(resultInstance[i].world);
-                var zone      = String(resultInstance[i].zone);
-                var started   = String(resultInstance[i].started);
-                var endtime   = String(resultInstance[i].endtime);
-                var type      = String(resultInstance[i].type);
-                var resultID  = resultInstance[i].resultID;
-                var controlVS = resultInstance[i].controlVS;
-                var controlNC = resultInstance[i].controlNC;
-                var controlTR = resultInstance[i].controlTR;
+                var world      = String(resultInstance[i].world);
+                var zone       = String(resultInstance[i].zone);
+                var started    = String(resultInstance[i].started);
+                var endtime    = String(resultInstance[i].endtime);
+                var type       = String(resultInstance[i].type);
+                var resultID   = resultInstance[i].resultID;
+                var controlVS  = resultInstance[i].controlVS;
+                var controlNC  = resultInstance[i].controlNC;
+                var controlTR  = resultInstance[i].controlTR;
                 var instanceID = resultInstance[i].instanceID;
 
                 var message = {
-                    "world_id": world,
-                    "zone_id": zone,
-                    "start_time": started,
-                    "end_time": 0,
+                    "world_id":               world,
+                    "zone_id":                zone,
+                    "start_time":             started,
+                    "end_time":               0,
                     "metagame_event_type_id": type,
-                    "control_vs": controlVS,
-                    "control_nc": controlNC,
-                    "control_tr": controlTR,
+                    "control_vs":             controlVS,
+                    "control_nc":             controlNC,
+                    "control_tr":             controlTR,
                     "instance_id":            instanceID
                 };
 
@@ -5743,7 +5756,7 @@ function processActives(message) {
 
     if (config.debug.sync === true) {
         console.log(JSON.stringify(instances, null, 4));
-        }
+    }
 
     Object.keys(data).forEach(function(world) {
         Object.keys(data[world].metagame_events).forEach(function(a) {
@@ -5763,11 +5776,11 @@ function processActives(message) {
                     if (config.debug.sync == true) {
                         console.log(success("Alert found"));
                         console.log(notice(JSON.stringify(instances[w], null, 4)));
-                }
+                    }
 
                     instanceFound = true;
                 }
-                        });
+            });
 
             // If instance was not found, force start
             if (instanceFound === false) {
@@ -5777,7 +5790,7 @@ function processActives(message) {
 
                 if (config.debug.sync === true) {
                     console.log(critical(JSON.stringify(alert, null, 4)));
-                    }
+                }
 
                 /**
                  * message = {
@@ -5797,11 +5810,11 @@ function processActives(message) {
                 pool.getConnection(function(err, dbConnection) {
                     insertAlert(alert, dbConnection, function(resultID) {
                         console.log(success("================ FORCE STARTED NEW ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
-            });
+                    });
 
                     dbConnection.release();
-        });
-    }
+                });
+            }
         });
     });
 };
