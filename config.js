@@ -11,9 +11,10 @@ let config = {
 
     },
     debug: {
-        censusEvents: true,
-        censusMessages: true,
-        websocketMessage: true
+        censusWebsocketStatus: true,
+        censusWebsocketMessages: true,
+        censusWebsocketMessage: true,
+        pushChannels: true
     },
     supplementalConfig: {
         worlds : {
