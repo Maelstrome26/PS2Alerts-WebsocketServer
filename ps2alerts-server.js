@@ -5674,8 +5674,6 @@ var maintenance = setInterval(function()
 }, maintTimer);
 
 setInterval(function() {
-    console.log('Firing alert sync');
-
     var actives = '{"action":"activeMetagameEvents"}'; // Pull a list of all active alerts
 
     try {
@@ -5683,7 +5681,7 @@ setInterval(function() {
     } catch (e) {
         reportError("Error: "+e, "Metagame Active Alerts message failed", true);
     }
-}, 5000);
+}, 30000 );
 
 function processActives(message) {
     var data = message.worlds;
