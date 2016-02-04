@@ -915,7 +915,8 @@ function reportError(error, loc, severeError)
 }
 
 function resetScript() {
-    process.exit(1);
+    reportError("RESTARTING SCRIPT", "resetScript");
+    process.exit(0);
 };
 
 /**
