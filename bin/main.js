@@ -2,6 +2,7 @@
 
 console.log("Starting collector");
 
+const database = require('../lib/database.js');
 const routerPush = require('../lib/router_push.js');
 const routerInt = require('../lib/router_internal.js');
 const pf = require('../lib/parsers/parser_facilities.js');

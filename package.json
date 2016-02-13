@@ -23,7 +23,10 @@
   },
   "homepage": "https://github.com/Maelstrome26/ps2alerts-ws",
   "dependencies": {
+    "bookshelf": "^0.9.1",
     "cli-color": "^1.1.0",
+    "knex": "0.9.0",
+    "mariasql": "^0.2.5",
     "ws": "^1.0.1"
   }
 }
