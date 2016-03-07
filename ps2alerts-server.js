@@ -963,26 +963,6 @@ function insertAlert(message, dbConnectionA, callback)
         {
             var returned = true;
 
-            var empires = [];
-            var attacker = 0;
-            var top = 0;
-
-            empires[1] = message.control_vs;
-            empires[2] = message.control_nc;
-            empires[3] = message.control_tr;
-
-            console.log("CONTROL: "+empires);
-
-            for (var i = empires.length - 1; i >= 1; i--) {
-                if (empires[i] > top)
-                {
-                    top = empires[i];
-                    attacker = factions[i];
-                }
-            }
-
-            empires.sort(function(a, b){return b-a;});
-
             var now = new time.Date();
             var timezone = 'UTC';
 
