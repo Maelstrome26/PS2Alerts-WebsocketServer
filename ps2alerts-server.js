@@ -401,9 +401,11 @@ function processMessage(messageData, client, wss, dbConnection)
 
     if (message) // If valid
     {
-        if (message.action && message.action == "activeMetagameEvents") {
-            console.log(notice("Sending Actives to processor"));
-            processActives(message);
+        if (config.toggles.sync === true) {
+            if (message.action && message.action == "activeMetagameEvents") {
+                console.log(notice("Sending Actives to processor"));
+                processActives(message);
+            }
         }
 
         var eventType  = message.event_type;
@@ -3733,11 +3735,6 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
     }
 }
 
-var factions = [];
-factions[0] = "VS";
-factions[1] = "NC";
-factions[2] = "TR";
-
 function calcWinners(message, resultID, Lresult, Fresult, dbConnection, callback)
 {
     dbConnection.query("SELECT * FROM ws_results WHERE resultID="+resultID, function(error, result)
@@ -3746,110 +3743,57 @@ function calcWinners(message, resultID, Lresult, Fresult, dbConnection, callback
         {
             throw ("NO RESULT RECORD COULD BE FOUND! FOR ALERT #"+resultID);
         }
-        var attackers = result[0]["ResultStarter"];
 
-        var eventID = result[0]["ResultAlertType"];
-        var top = 0;
         var winner = "TO CALC";
         var draw = 0;
         var domination = 0;
+        var instance = instances[resultID];
+        var time = new Date().getTime() / 1000; // Seconds convert
 
-        var empires = [];
+        var duration = parseInt(time) - parseInt(instance.startTime);
 
-        empires[0] = Lresult[0].controlVS;
-        empires[1] = Lresult[0].controlNC;
-        empires[2] = Lresult[0].controlTR;
-
-        for (var i = empires.length - 1; i >= 0; i--) { // Sort empires into result order
-            if (empires[i] > top)
+        var empires = [
             {
-                top = empires[i];
-                winner = factions[i];
+                score: Lresult[0].controlVS,
+                empire: 'VS'
+            },
+            {
+                score: Lresult[0].controlNC,
+                empire: 'NC'
+            },
+            {
+                score: Lresult[0].controlTR,
+                empire: 'TR'
             }
+        ];
+
+        // Sort by score
+        empires.sort(function(a,b) {
+            if (a.score < b.score) {
+                return 1;
+            }
+            if (a.score > b.score) {
+                return -1;
+            }
+
+            return 0;
+        });
+
+        winner = empires[0].empire; // Set the winner
+
+        if (empires[0].score > 94) { // If cont lock, count as domination
+            domination = 1;
+        } else if (duration < 5390) { // If ended early, must be VP victory / domination
+            domination = 1;
+        } else if (empires[0].score == empires[1].score) {
+            winner = "DRAW";
+            draw = 1;
         }
 
-        console.log(success("WINNER = "+winner));
-
-        empires.sort(function(a, b){ return b-a; });
-
-        switch(eventID) // Logic for calculating alert winner scenarios (domination etc)
-        {
-            // Adversarial Alerts
-            case '31':
-            case '32':
-            case '33':
-            case '34':
-            {
-                var DomThreshold = 65;
-                var AttWinThreshold = 50;
-                var DefWinThreshold = 50;
-                var WinThreshold = 50;
-                var Fresult = [];
-
-                Fresult[1] = Lresult[0].controlVS;
-                Fresult[2] = Lresult[0].controlNC;
-                Fresult[3] = Lresult[0].controlTR;
-
-                console.log("F RESULT: "+Fresult);
-                console.log("ATTACKERS: "+attackers);
-                console.log("ATTACKERS %:" +Fresult[attackers]);
-
-                if(Fresult[attackers] >= DomThreshold) // If attackers maintain higher than 65%
-                {
-                    winner = factions[attackers];
-                    domination = 1;
-                }
-                else
-                {
-                    top = empires[0];
-
-                    if (top >= WinThreshold)
-                    {
-                        for (i = 0; i < Fresult.length; i++) {
-                            if (Fresult[i] == top)
-                            {
-                                winner = factions[i];
-                            }
-                        }
-                    }
-                    else if (empires[0] == empires[1]) // If Draw
-                    {
-                        winner = "DRAW";
-                        draw = 1;
-                        console.log("DRAW!");
-                    }
-                }
-
-                callback(winner, draw, domination);
-                break;
-            }
-            // Territory Alerts
-            case '1':
-            case '2':
-            case '3':
-            case '4':
-            {
-                top = empires[0];
-
-                if(message.domination == 1) // If domination
-                {
-                    domination = 1;
-                    console.log("DOMINATION");
-                }
-                else if (empires[0] == empires[1])
-                {
-                    winner = "DRAW";
-                    draw = 1;
-                    console.log("DRAW!");
-                }
-
-                // Otherwise, pick the winner as determined above the switch.
-
-                break;
-            }
-        }
-
-        console.log("WINNER IS: "+winner);
+        console.log('Duration', duration);
+        console.log('Domination:', domination);
+        console.log("Draw:", draw);
+        console.log(success("WINNER IS:", winner));
 
         callback(winner, draw, domination);
     });
@@ -5658,11 +5602,8 @@ var maintenance = setInterval(function()
     {
         if (config.debug.instances === true)
         {
-            if (instances.length > 0)
-            {
-                console.log(notice("=========== CURRENT ALERTS IN PROGRESS: ==========="));
-                console.log(instances);
-            }
+            console.log(notice("=========== CURRENT ALERTS IN PROGRESS: ==========="));
+            console.log(instances);
         }
     });
 
@@ -5673,15 +5614,18 @@ var maintenance = setInterval(function()
 
 }, maintTimer);
 
-setInterval(function() {
-    var actives = '{"action":"activeMetagameEvents"}'; // Pull a list of all active alerts
+if (config.toggles.sync === true) {
+    setInterval(function() {
 
-    try {
-        client.send(actives);
-    } catch (e) {
-        reportError("Error: "+e, "Metagame Active Alerts message failed", true);
-    }
-}, 30000 );
+        var actives = '{"action":"activeMetagameEvents"}'; // Pull a list of all active alerts
+
+        try {
+            client.send(actives);
+        } catch (e) {
+            reportError("Error: "+e, "Metagame Active Alerts message failed", true);
+        }
+    }, 30000 );
+}
 
 function processActives(message) {
     var data = message.worlds;

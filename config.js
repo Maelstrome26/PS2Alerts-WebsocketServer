@@ -25,7 +25,8 @@ var config = {
         populationchange: true, // Enables population numbers tracking provided by Jhett
         xpmessage: true, // Enables XP tracking (requires more work)
         classStats: true, // Enables Class Statistitcs tracking
-        achievements: false // Enables Achievement tracking
+        achievements: false, // Enables Achievement tracking
+        sync: true // Enables syncing of alerts with census
     },
     debug : {
         achievements: false,
