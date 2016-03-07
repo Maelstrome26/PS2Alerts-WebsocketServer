@@ -1034,7 +1034,6 @@ function insertAlert(message, dbConnectionA, callback)
                 ResultTimeType: timeBracket,
                 ResultAlertCont: zone,
                 ResultAlertType: alertType,
-                ResultMajority: attacker,
                 InProgress: 1
             };
 
