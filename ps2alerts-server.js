@@ -2047,7 +2047,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                 });
             }
 
-            var updateTotalQuery = 'UPDATE ws_players_total SET playerServer = '+worldID+', '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'"';
+            var updateTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+attackerOutfit+'", playerServer = '+worldID+', playerFaction = '+attackerFID+', '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'"';
 
             dbConnectionP.query(updateTotalQuery, function(err, resultB)
             {
@@ -2146,7 +2146,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                     }
                 });
 
-                var victimTotalQuery = 'UPDATE ws_players_total SET '+vDeathQuery+' WHERE playerID="'+victimID+'"';
+                var victimTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+ victimOutfit+'", '+vDeathQuery+' WHERE playerID="'+victimID+'"';
 
                 dbConnectionP.query(victimTotalQuery, function(err, resultC)
                 {
@@ -2374,11 +2374,12 @@ function batchUpdateOutfitTotals(callback)
                             {
                                 if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                 {
-                                    reportError(err, "Insert Outfit Stats");
+                                    console.log(notice(outfitArrayKills));
+                                    reportError(err, "Insert Outfit Stats Kills");
                                 }
                                 else
                                 {
-                                    handleDeadlock(updateOutfitAlert, "Insert outfit stats");
+                                    handleDeadlock(updateOutfitAlert, "Insert outfit stats Kills MESG: "+ err);
                                 }
                             }
                         });
@@ -5393,6 +5394,15 @@ wss.on('connection', function(clientConnection)
                         var resultID = message.resultID;
 
                         sendResult("reload", "reload", resultID);
+                    }
+                    else if (message.action == "middlemanStatus")
+                    {
+                        console.log("Recieved middleman status request");
+                        var message = {
+                            messageType: "middlemanStatus",
+                            value: connectionState
+                        };
+                        clientConnection.send(JSON.stringify(message));
                     }
 
                     // End of message actions
