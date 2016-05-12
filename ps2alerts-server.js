@@ -944,6 +944,10 @@ function insertAlert(message, dbConnectionA, callback)
     var zone = message.zone_id;
     var alertType = message.metagame_event_type_id;
 
+    if (zone === '2') {
+        return false;
+    }
+
     console.log(notice("NEW ALERT DETECTED!"));
 
     dbConnectionA.query("SELECT * FROM ws_results WHERE ResultStartTime = "+message.start_time+" AND ResultServer="+world, function(err, result)
