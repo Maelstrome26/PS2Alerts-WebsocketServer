@@ -428,6 +428,7 @@ function processMessage(messageData, client, wss, dbConnection)
 
                         var alertType = message.metagame_event_type_id;
                         var world = message.world_id;
+                        var zone = message.zone_id;
 
                         APIAlertTypes(alertType, function(typeData) // Check if alerts are supported
                         {
@@ -445,7 +446,7 @@ function processMessage(messageData, client, wss, dbConnection)
                                 {
                                     if (message.status == "1") // If started
                                     {
-                                        if (world != "19")
+                                        if (world != "19" && zone != "2")
                                         {
                                             if (resultIDArray.length === 0)
                                             {
@@ -942,10 +943,6 @@ function insertAlert(message, dbConnectionA, callback)
     var world = message.world_id;
     var zone = message.zone_id;
     var alertType = message.metagame_event_type_id;
-
-    if (zone === 2) {
-        return false;
-    }
 
     console.log(notice("NEW ALERT DETECTED!"));
 
