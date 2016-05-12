@@ -945,6 +945,7 @@ function insertAlert(message, dbConnectionA, callback)
     var alertType = message.metagame_event_type_id;
 
     if (zone === '2') {
+        console.log(critical("Indar being ignored."));
         return false;
     }
 
