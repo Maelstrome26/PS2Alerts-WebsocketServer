@@ -5314,7 +5314,7 @@ wss.on('connection', function(clientConnection)
 
                             //console.log(notice("Recieved Timesync message"));
 
-                            clientConnection.send('{"response":"time", "serverTime": '+serverTime+', "clientTime": '+clientTime+', "remaining": '+remaining+', "timediff":'+diff+'}');
+                            clientConnection.send('{"messageType": "timeSync", "serverTime": '+serverTime+', "clientTime": '+clientTime+', "remaining": '+remaining+', "timediff":'+diff+'}');
 
                             if (config.debug.time === true)
                             {
@@ -5328,7 +5328,7 @@ wss.on('connection', function(clientConnection)
                                 console.log(critical("SENDING TIMESYNC WAIT MESSAGE"));
                             }
 
-                            clientConnection.send('{"response":"timeWait"}');
+                            clientConnection.send('{"messageType": "timeSyncWait"}');
                         }
                     }
                     else if (message.action == "alertStatus") // First call for the monitor

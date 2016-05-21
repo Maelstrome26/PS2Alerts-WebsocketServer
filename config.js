@@ -56,7 +56,7 @@ var config = {
         resultID: true,
         status: true,
         sync: false,
-        time: false,
+        time: true,
         upcoming: true,
         vehicles: false,
         weapons: true,
