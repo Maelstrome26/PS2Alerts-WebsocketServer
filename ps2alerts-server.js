@@ -5267,7 +5267,7 @@ wss.on('connection', function(clientConnection)
                             console.log(success("SUBSCRIBED WEBSOCKET TO ALERT #"+resultID));
                         }
 
-                        clientConnection.send('{"response":"Subscribed"}');
+                        clientConnection.send('{"messageType": "subscribed"}');
                     }
                     else if (message.action == "timesync")
                     {
