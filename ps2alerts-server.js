@@ -968,7 +968,7 @@ function insertAlert(message, dbConnectionA, callback)
         {
             var returned = true;
 
-            var now = new time.Date();
+            var moment = require('moment-timezone');
             var timezone = 'UTC';
 
             var PST = 'America/Los_Angeles';
@@ -994,9 +994,9 @@ function insertAlert(message, dbConnectionA, callback)
                 timezone = CDT; // Central Standard Time
             }
 
-            now.setTimezone(timezone);
+            moment.tz(timezone);
 
-            var timeHour = now.getHours();
+            var timeHour = moment.format('HH'); // Get hours
             var timeBracket = 'TEST';
 
             console.log(timeHour);
