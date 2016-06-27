@@ -968,6 +968,7 @@ function insertAlert(message, dbConnectionA, callback)
         {
             var returned = true;
 
+            var now = new Date().getTime();
             var moment = require('moment-timezone');
             var timezone = 'UTC';
 
@@ -994,9 +995,7 @@ function insertAlert(message, dbConnectionA, callback)
                 timezone = CDT; // Central Standard Time
             }
 
-            moment.tz(timezone);
-
-            var timeHour = moment.format('HH'); // Get hours
+            var timeHour = moment.tz(timestamp, timezone).format('HH');
             var timeBracket = 'TEST';
 
             console.log(timeHour);
