@@ -995,7 +995,7 @@ function insertAlert(message, dbConnectionA, callback)
                 timezone = CDT; // Central Standard Time
             }
 
-            var timeHour = moment.tz(timestamp, timezone).format('HH');
+            var timeHour = moment.tz(now, timezone).format('HH');
             var timeBracket = 'TEST';
 
             console.log(timeHour);
