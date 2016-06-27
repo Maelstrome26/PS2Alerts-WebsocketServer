@@ -13,7 +13,6 @@ var http = require('http');
 var url = require('url');
 var clone = require('clone');
 var clc = require('cli-color');
-var time = require('time');
 var critical = clc.red.bold;
 var warning = clc.yellow;
 var notice = clc.blueBright;
@@ -5271,7 +5270,7 @@ wss.on('connection', function(clientConnection)
                     }
                     else if (message.action == "timesync")
                     {
-                        var clientTime = message.time;
+                        var clientTime = Math.floor(message.time);
                         var resultID = message.resultID;
                         var mode = message.mode;
 
@@ -5312,9 +5311,11 @@ wss.on('connection', function(clientConnection)
                                 var remaining = "MODE NOT SELECTED!";
                             }
 
+                            var correctTime = serverTime + remaining + diff;
+
                             //console.log(notice("Recieved Timesync message"));
 
-                            clientConnection.send('{"messageType": "timeSync", "serverTime": '+serverTime+', "clientTime": '+clientTime+', "remaining": '+remaining+', "timediff":'+diff+'}');
+                            clientConnection.send('{"messageType": "timeSync", "serverTime": '+serverTime+', "clientTime": '+clientTime+', "remaining": '+remaining+', "timediff":'+diff+', "correctTime":'+correctTime+'}');
 
                             if (config.debug.time === true)
                             {
