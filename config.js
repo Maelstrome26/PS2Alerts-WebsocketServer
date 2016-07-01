@@ -39,7 +39,12 @@
     },
     // All events we're going to moni
     events: [
-        
+        'Death',
+        'GainExperience',
+        'MetagameEvent',
+        'PlayerFacilityCapture',
+        'PlayerFacilityDefend',
+        'VehicleDestroy'
     ]
     };
 
