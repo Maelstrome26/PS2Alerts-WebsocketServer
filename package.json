@@ -1,32 +1,33 @@
 {
-  "name": "ps2alerts-websocket",
-  "version": "0.0.0",
-  "description": "The websocket collection script that powers PS2Alerts.com.",
-  "main": "config.js",
-  "bin": {
-    "ps2alerts-websocket": "main.js"
-  },
-  "directories": {
-    "test": "test"
-  },
+  "name": "ps2construction",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "https://Maelstrome26@github.com/Maelstrome26/ps2alerts-ws.git"
+    "url": "git+https://Maelstrome26@github.com/Maelstrome26/ps2construction.git"
   },
-  "author": "",
-  "license": "ISC",
+  "author": "Matt Cavanagh <maelstrome26@gmail.com>",
+  "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Maelstrome26/ps2alerts-ws/issues"
+    "url": "https://github.com/Maelstrome26/ps2construction/issues"
   },
-  "homepage": "https://github.com/Maelstrome26/ps2alerts-ws",
+  "homepage": "https://github.com/Maelstrome26/ps2construction#readme",
   "dependencies": {
-    "bookshelf": "^0.9.1",
-    "cli-color": "^1.1.0",
-    "knex": "0.9.0",
-    "mariasql": "^0.2.5",
-    "ws": "^1.0.1"
+    "bluebird": "^3.4.1",
+    "colors": "^1.1.2",
+    "dbgcensus": "^1.0.0",
+    "http": "0.0.0",
+    "knex": "^0.11.7",
+    "lodash": "^4.13.1",
+    "moment": "^2.13.0",
+    "mysql": "^2.11.1",
+    "mysql2": "^1.0.0-rc.5",
+    "promise-redis": "0.0.5",
+    "redis": "^2.6.2",
+    "ws": "^1.1.0"
   }
 }

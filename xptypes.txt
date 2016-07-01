@@ -1,0 +1,43 @@
+966 - Galaxy Damage HIVE
+967 - Liberator Damage HIVE
+969 - Mosquito Damage HIVE
+970 - Reaver Damage HIVE
+971 - Scythe Damage HIVE
+
+640 - Kill / Destroy - Construction - Core
+641 - SquadRepair - Construction - Core
+642 - Repair - Construction - Core
+643 - Kill Assist - Construction - Core
+
+674 - Cortium Harvest
+675 - Cortium Deposit
+
+1212 - Kill / Destroy - Construction Med HIVE XP
+1213 - Squad Repair - Construction Med HIVE XP
+1214 - Repair - Construction Med HIVE XP
+1232 - Kill / Destroy Construction Med HIVE XP
+1233 - Squadrepair - Construction Med HIVE XP
+1234 - Repair - Construction MED HIVE XP
+1243 - Kill / Destroy - Construction SMALL HIVE XP
+1244 - Squad Repair - Small HIVE XP
+1245 - Repair - Construction - Small HIVE XP
+1254 - Kill / Destroy construction - Large HIVE XP
+1261 - Kill / Destroy Construction - Small HIVE XP
+1262 - SquadRepair - Construction Small HIVE XP
+1263 - Repair - Construction - Small HIVE XP
+
+EXAMPLE XP MESSAGE:
+
+"payload": {
+        "amount": "16",
+        "character_id": "5428245075223380049",
+        "event_name": "GainExperience",
+        "experience_id": "674",
+        "loadout_id": "15",
+        "other_id": "0",
+        "timestamp": "1466965420",
+        "world_id": "19",
+        "zone_id": "6"
+    },
+    "service": "event",
+    "type": "serviceMessage"
