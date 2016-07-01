@@ -37,6 +37,7 @@
             ps4usWorlds: [1000, 1001],
             ps4euWorlds: [2000, 2001],
         },
+        events: [// All events we're going to monitor
             'Death',
             'GainExperience',
             'MetagameEvent',
