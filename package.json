@@ -24,6 +24,7 @@
     "knex": "^0.11.7",
     "lodash": "^4.13.1",
     "moment": "^2.13.0",
+    "moment-timezone": "^0.5.4",
     "mysql": "^2.11.1",
     "mysql2": "^1.0.0-rc.5",
     "nodemailer": "^2.4.2",
