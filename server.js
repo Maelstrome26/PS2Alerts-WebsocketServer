@@ -4,22 +4,19 @@
     const config = require('./config.js');
     const consoleLogger = require('./lib/utilities/consoleLogger.js');
     const process = require('process');
+    const websocketClient = require('./lib/websocket.js');
 
     consoleLogger.info('Booting', 'Hello world!');
 
-    let metagameSocket = {};
-    let ps2Socket = {};
-    //let ps2ps4euSocket = {};
-    //let ps2ps4usSocket = {};
+    let ps2Socket;
 
     // FIRE ZE LAZORS
     startSockets();
 
     function startSockets() {
-        metagameSocket = require('./lib/websocket.js');
-        metagameSocket.initWebsocket('ps2', 'metagame');
-        //ps2Socket = require('./lib/websocket.js');
-        //ps2Socket.initWebsocket('ps2', 'listener');
+        ps2Socket = new websocketClient('ps2');
+
+        console.log(ps2Socket);
     }
 
     process.on('uncaughtException', function(err) {
@@ -31,21 +28,13 @@
     // @todo I need to validate this is working correctly. I'm pretty sure it's not right now.
     setInterval(function() {
         consoleLogger.debug('server:websocketStatus', 'Checking websocket states');
+        let forceFail = true;
 
-        /*if (! ps2Socket || ps2Socket.isConnected() === false) {
+        if (! ps2Socket || ps2Socket.isConnected() === false || forceFail === true) {
             consoleLogger.error('server:websocketStatus', 'RESTARTING PS2 WEBSOCKET');
             // In theory this should destroy the websocket, and recreate it...
             ps2Socket = {}
-            ps2Socket = require('./lib/websocket.js');
-            ps2Socket.initWebsocket('ps2', 'metagame');
-        }*/
-
-        if (! metagameSocket || metagameSocket.isConnected() === false) {
-            consoleLogger.error('server:websocketStatus', 'RESTARTING PS2 META WEBSOCKET', true);
-            // In theory this should destroy the websocket, and recreate it...
-            metagameSocket = {}
-            metagameSocket = require('./lib/websocket.js');
-            metagameSocket.initWebsocket('ps2', 'metagame');
+            ps2Socket = new websocketClient('ps2');
         }
     }, 5000);
 }());
