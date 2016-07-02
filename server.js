@@ -23,7 +23,7 @@
     }
 
     process.on('uncaughtException', function(err) {
-        consoleLogger.critical('process', 'UNCAUGHT EXCEPTION: '+JSON.stringify(err, null, 4));
+        consoleLogger.critical('process', 'UNCAUGHT EXCEPTION: '+err.stack);
     });
 
     // Checks the state of each websocket to make sure it's connected. Restarts
