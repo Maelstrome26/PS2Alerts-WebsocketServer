@@ -11,13 +11,14 @@
     //let ps2ps4euSocket = {};
     //let ps2ps4usSocket = {};
 
+    // FIRE ZE LAZORS
     startSockets();
 
     function startSockets() {
         metagameSocket = require('./lib/websocket.js');
         metagameSocket.initWebsocket('ps2', 'metagame');
-        ps2Socket = require('./lib/websocket.js');
-        ps2Socket.initWebsocket('ps2', 'listener');
+        //ps2Socket = require('./lib/websocket.js');
+        //ps2Socket.initWebsocket('ps2', 'listener');
     }
 
     // Checks the state of each websocket to make sure it's connected. Restarts
@@ -26,12 +27,20 @@
     setInterval(function() {
         consoleLogger.debug('server:websocketStatus', 'Checking websocket states');
 
-        if (ps2Socket.isConnected() === false) {
+        /*if (! ps2Socket || ps2Socket.isConnected() === false) {
             consoleLogger.error('server:websocketStatus', 'RESTARTING PS2 WEBSOCKET');
             // In theory this should destroy the websocket, and recreate it...
             ps2Socket = {}
             ps2Socket = require('./lib/websocket.js');
-            ps2Socket.initWebsocket('ps2');
+            ps2Socket.initWebsocket('ps2', 'metagame');
+        }*/
+
+        if (! metagameSocket || metagameSocket.isConnected() === false) {
+            consoleLogger.error('server:websocketStatus', 'RESTARTING PS2 META WEBSOCKET');
+            // In theory this should destroy the websocket, and recreate it...
+            metagameSocket = {}
+            metagameSocket = require('./lib/websocket.js');
+            metagameSocket.initWebsocket('ps2', 'metagame');
         }
     }, 5000);
 }());

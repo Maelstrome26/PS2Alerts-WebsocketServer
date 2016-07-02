@@ -14,7 +14,8 @@
             //'messageProcessor:executePlayerUpdate'
         ],
         statusMessages: {
-            census: true
+            census: true,
+            debugAll: true // Turns on ALL debugging messages
         },
         supplementalConfig: {
             worlds : {
