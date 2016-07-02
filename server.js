@@ -41,7 +41,7 @@
         }*/
 
         if (! metagameSocket || metagameSocket.isConnected() === false) {
-            consoleLogger.error('server:websocketStatus', 'RESTARTING PS2 META WEBSOCKET');
+            consoleLogger.error('server:websocketStatus', 'RESTARTING PS2 META WEBSOCKET', true);
             // In theory this should destroy the websocket, and recreate it...
             metagameSocket = {}
             metagameSocket = require('./lib/websocket.js');
