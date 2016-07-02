@@ -9,6 +9,8 @@
         serverPort: userconfig.serverPort,
         database : userconfig.database,
         redis: userconfig.redis,
+        sendNotifyEmails: true,
+        email: userconfig.email,
         allowedDebug: [ // Debug message keys that are allowed to be shown
             'websocket:heartbeat',
             //'messageProcessor:executePlayerUpdate'
@@ -17,6 +19,7 @@
             census: true,
             debugAll: true // Turns on ALL debugging messages
         },
+        sendTestMessages: true,
         supplementalConfig: {
             worlds : {
                 1: 'Connery',
@@ -48,5 +51,11 @@
         ]
     };
 
-   module.exports = config;
+    // Disable email sending if no email message was supplied.
+    if (! userconfig.email || ! userconfig.email.address || userconfig.email.address.length === 0) {
+        config.sendNotifyEmails = false;
+        config.email = false;
+    }
+
+    module.exports = config;
 }());

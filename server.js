@@ -3,6 +3,7 @@
 
     const config = require('./config.js');
     const consoleLogger = require('./lib/utilities/consoleLogger.js');
+    const process = require('process');
 
     consoleLogger.info('Booting', 'Hello world!');
 
@@ -20,6 +21,10 @@
         //ps2Socket = require('./lib/websocket.js');
         //ps2Socket.initWebsocket('ps2', 'listener');
     }
+
+    process.on('uncaughtException', function(err) {
+        consoleLogger.critical('process', 'UNCAUGHT EXCEPTION: '+JSON.stringify(err, null, 4));
+    });
 
     // Checks the state of each websocket to make sure it's connected. Restarts
     // them if not.
