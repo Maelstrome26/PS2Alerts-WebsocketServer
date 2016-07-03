@@ -15,8 +15,6 @@
 
     function startSockets() {
         ps2Socket = new websocketClient('ps2');
-
-        console.log(ps2Socket);
     }
 
     process.on('uncaughtException', function(err) {
@@ -26,15 +24,20 @@
     // Checks the state of each websocket to make sure it's connected. Restarts
     // them if not.
     // @todo I need to validate this is working correctly. I'm pretty sure it's not right now.
-    setInterval(function() {
+    let heartbeatInterval = setInterval(function() {
         consoleLogger.debug('server:websocketStatus', 'Checking websocket states');
-        let forceFail = true;
 
-        if (! ps2Socket || ps2Socket.isConnected() === false || forceFail === true) {
+        if (! ps2Socket || ps2Socket.isConnected() === false) {
             consoleLogger.error('server:websocketStatus', 'RESTARTING PS2 WEBSOCKET');
             // In theory this should destroy the websocket, and recreate it...
-            ps2Socket = {}
-            ps2Socket = new websocketClient('ps2');
+            ps2Socket.restartSocket().then(function() {
+                console.log('Webocket cleanly exited!');
+                ps2Socket = {}
+
+                setTimeout(function() {
+                    ps2Socket = new websocketClient('ps2');
+                }, 2500);
+            });
         }
-    }, 5000);
+    }, 15000);
 }());
