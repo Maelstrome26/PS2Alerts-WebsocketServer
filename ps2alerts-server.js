@@ -1232,6 +1232,7 @@ function endAlert(message, resultID, client, dbConnectionA, callback)
                                                     sendResult("alertEnd", toSend, resultID);
 
                                                     //fireSubscriptions(message, resultID, "unsubscribe");
+                                                    triggerLeaderboardUpdate(world);
                                                 }
                                                 else
                                                 {
@@ -4503,6 +4504,19 @@ function checkInstances(callback)
     });
 
     callback();
+}
+
+function triggerLeaderboardUpdate(world) {
+    // Tell the API to re-process the leaderboards.
+    var url = 'http://api.ps2alerts.com/v2/leaderboards/update?server='+world;
+
+    http.get(url, function(res) {
+        if (res.statusCode == 202) {
+            console.log(success("Successfully updated Leaderboard Endpoint for server:" + server))
+        } else {
+            console.log(critical("Leaderboard endpoint didn't accept update!"))
+        }
+    });
 }
 
 function resetConnection()
