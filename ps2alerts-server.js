@@ -445,7 +445,7 @@ function processMessage(messageData, client, wss, dbConnection)
                                 {
                                     if (message.status == "1") // If started
                                     {
-                                        if (world != "19" && zone != "2")
+                                        if (world != "19")
                                         {
                                             if (resultIDArray.length === 0)
                                             {
@@ -942,11 +942,6 @@ function insertAlert(message, dbConnectionA, callback)
     var world = message.world_id;
     var zone = message.zone_id;
     var alertType = message.metagame_event_type_id;
-
-    if (zone === '2') {
-        console.log(critical("Indar being ignored."));
-        return false;
-    }
 
     console.log(notice("NEW ALERT DETECTED!"));
 
