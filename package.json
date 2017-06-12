@@ -4,7 +4,7 @@
   "description": "The websocket collection script that powers PS2Alerts.com.",
   "main": "config.js",
   "scripts": {
-    "start": "npm install && node ps2alerts-server.js",
+    "start": "node ps2alerts-server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
