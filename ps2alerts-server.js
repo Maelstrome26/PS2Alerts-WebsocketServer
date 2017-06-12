@@ -1221,7 +1221,8 @@ function endAlert(message, resultID, client, dbConnectionA, callback)
                                                         "world": world,
                                                         "zone": zone
                                                     };
-                                                    console.log(notice("Websocket Message: ")+toSend);
+                                                    console.log(notice("Websocket Message: "));
+													console.log(notice(JSON.stringify(toSend, null, 4)));
 
                                                     sendMonitor("alertEnd", toSend);
                                                     sendResult("alertEnd", toSend, resultID);
@@ -1439,7 +1440,7 @@ function combatParse(message, resultID, dbConnectionCache)
 
     // ATTEMPT TO GET CHARACTER NAME IF MISSING
 
-    checkPlayerCache(killerID, message.world_id, dbConnectionCache, function(killerName)
+    checkPlayerCache(killerID, message.world_id, dbConnectionCache, function(killerName, killerBR)
     {
         if (config.debug.combat === true)
         {
@@ -1451,7 +1452,7 @@ function combatParse(message, resultID, dbConnectionCache)
             killerName = message.attacker_character_name;
         }
 
-        checkPlayerCache(victimID, message.world_id, dbConnectionCache, function(victimName)
+        checkPlayerCache(victimID, message.world_id, dbConnectionCache, function(victimName, victimBR)
         {
             if (config.debug.combat === true)
             {
@@ -1513,11 +1514,13 @@ function combatParse(message, resultID, dbConnectionCache)
                 attackerOutfit: killerOutfit,
                 attackerFaction: message.attacker_faction_id,
                 attackerLoadout: message.attacker_loadout_id,
+				attackerBR: killerBR,
                 victimID: victimID,
                 victimName: victimName,
                 victimOutfit: victimOutfit,
                 victimFaction: message.victim_faction_id,
                 victimLoadout: message.victim_loadout_id,
+				victimBR: victimBR,
                 weaponID: message.weapon_id,
                 vehicleID: message.vehicle_id,
                 headshot: message.is_headshot,
@@ -1591,8 +1594,10 @@ function combatParse(message, resultID, dbConnectionCache)
                         {
                             console.log("Victim Outfit Object Built");
                         }
-
+                        
+                        // console.log(JSON.stringify(combatArray, null, 4));
                         sendResult("combat", combatArray, resultID);
+						sendWorld('Combat', JSON.stringify(combatArray), combatArray.worldID);
 
                         insertCombatRecord(message, resultID, combatArray, dbConnectionC, function()
                         {
@@ -1625,11 +1630,13 @@ function insertCombatRecord(message, resultID, combatArray, dbConnectionC, callb
             attackerOutfit: combatArray.attackerOutfit,
             attackerFaction: combatArray.attackerFaction,
             attackerLoadout: combatArray.attackerLoadout,
+			attackerBR: combatArray.attackerBR,
             victimID: combatArray.victimID,
             victimName: combatArray.victimName,
             victimOutfit: combatArray.victimOutfit,
             victimFaction: combatArray.victimFaction,
             victimLoadout: combatArray.victimLoadout,
+			victimBR: combatArray.victimBR,
             weaponID: combatArray.weaponID,
             vehicleID: combatArray.vehicleID,
             headshot: combatArray.headshot,
@@ -1924,6 +1931,8 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
     var victimFID = combatArray.victimFaction;
     var attackerName = combatArray.attackerName;
     var victimName = combatArray.victimName;
+	var attackerBR = combatArray.attackerBR;
+	var victimBR = combatArray.victimBR;
     var timestamp = combatArray.timestamp;
     var headshot = combatArray.headshot;
     var worldID = combatArray.worldID;
@@ -2022,6 +2031,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                     playerDeaths: playerDeaths,
                     playerTeamKills: teamKill,
                     playerSuicides: suicide,
+					playerBR: attackerBR,
                     headshots: headshot,
                 };
 
@@ -2068,6 +2078,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                         playerTeamKills: teamKill,
                         playerSuicides: suicide,
                         headshots: headshot,
+						playerBR: attackerBR,
                         playerServer: worldID
                     };
 
@@ -2120,6 +2131,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                                 playerDeaths: 1,
                                 playerTeamKills: 0,
                                 playerSuicides: 0,
+								playerBR: victimBR,
                                 headshots: 0,
                             };
 
@@ -2166,6 +2178,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                             playerDeaths: 1,
                             playerTeamKills: 0,
                             playerSuicides: 0,
+							playerBR: victimBR,
                             headshots: 0,
                         };
 
@@ -3226,24 +3239,68 @@ function sendAdmins(messageType, message) // Sends message to WS Clients
         }
         else
         {
-        Object.keys(clientAdminConnections).forEach(function(key)
-        {
-            var clientConnection = clientAdminConnections[key];
+			Object.keys(clientAdminConnections).forEach(function(key)
+			{
+				var clientConnection = clientAdminConnections[key];
 
-            clientConnection.send(JSON.stringify(messageToSend), function(error)
-            {
-                if (error)
-                {
-                        console.log(critical("Websocket Admin Error: "+error));
-                        delete clientAdminConnections[clientConnection.id];
-                    }
-                });
-            });
+				clientConnection.send(JSON.stringify(messageToSend), function(error)
+				{
+					if (error)
+					{
+						console.log(critical("Websocket Admin Error: "+error));
+						delete clientAdminConnections[clientConnection.id];
+					}
+				});
+			});
         }
 
         if (config.debug.clients === true && messageType !== "perf" && messageType !== "keepalive")
         {
             console.log(notice("Message Sent to Admin Websockets"));
+        }
+    }
+}
+
+function sendWorld(messageType, message, world) // Sends message to WS Clients for world only
+{
+    var messageToSend = {};
+
+    if (config.debug.responses === true)
+    {
+        console.log(notice("STARTING WORLD SEND"));
+    }
+
+    if (message) // If Valid
+    {
+        messageToSend.data = message;
+        messageToSend.messageType = messageType;
+
+		if (clientWorldDebugConnections[world]) // If script was too quick for subscription
+		{
+			Object.keys(clientWorldDebugConnections[world]).forEach(function(key)
+			{
+				var clientConnection = clientWorldDebugConnections[world][key];
+
+				clientConnection.send(JSON.stringify(messageToSend), function(error)
+				{
+					if (error)
+					{
+						delete clientConnections[clientConnection.id];
+						delete clientWorldDebugConnections[world][clientConnection.id];
+
+						if (config.debug.clients === true)
+						{
+							console.log(notice("Websocket connection closed - Total: "+Object.keys(clientConnections).length));
+						}
+						console.log(critical("Client Error: "+error));
+					}
+				});
+			});
+		}
+
+        if (config.debug.keepalive === true && messageType != "keepalive")
+        {
+            console.log(notice("Message Sent to Result Websockets"));
         }
     }
 }
@@ -3403,15 +3460,16 @@ function findPlayerName(playerID, world, callback)
 
                                 var name = returned.character_list[0].name.first;
                                 var faction = returned.character_list[0].faction_id;
+								var br = returned.character_list[0].battle_rank.value;
 
-                                callback(name, faction);
+                                callback(name, faction, br);
                             }
                             else
                             {
                                 if (config.debug.census === true)
                                     console.log(warning("FAILED TO GET PLAYER NAME!"));
 
-                                callback(false, false);
+                                callback(false, false, false);
                             }
                         }
                     }
@@ -3537,18 +3595,19 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
 
             if (!result[0]) // If empty
             {
-                findPlayerName(playerID, world, function(name, faction)
+                findPlayerName(playerID, world, function(name, faction, br)
                 {
                     if (name !== false && faction !== false)
                     {
                         var now = Math.round(new Date().getTime() / 1000);
-                        var cacheExpires = now + 86400; // 1 Day
+                        var cacheExpires = now + 10800; // 3 hours
 
                         var insertPArray =
                         {
                             playerID: playerID,
                             playerName: name,
                             playerFaction: faction,
+							playerBR: br,
                             expires: cacheExpires
                         };
 
@@ -3576,14 +3635,14 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
                                 }
 
                                 dbConnectionCache.query('UPDATE cache_hits SET cacheMisses=cacheMisses+1 WHERE dataType="PlayerCache"');
-                                callback(name);
+                                callback(name, br);
                             }
                         });
                     }
                     else
                     {
                         console.log(critical("CENSUS PLAYER QUERY FAILED! SEARCHED FOR PLAYER: "+playerID));
-                        callback(false);
+                        callback(false, false);
                     }
                 });
             }
@@ -3595,7 +3654,7 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
                 }
 
                 dbConnectionCache.query('UPDATE cache_hits SET cacheHits=CacheHits+1 WHERE dataType="PlayerCache"');
-                callback(result[0].playerName);
+                callback(result[0].playerName, result[0].playerBR);
             }
         }
     });
@@ -3647,7 +3706,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
 
                         if (outfitName !== false)
                         {
-                            findPlayerName(leaderID, worldID, function(name, faction)
+                            findPlayerName(leaderID, worldID, function(name, faction, br)
                             {
                                 var now = Math.round(new Date().getTime() / 1000);
                                 var cacheExpires = now + 86400; // 1 Day
@@ -5176,6 +5235,7 @@ var connectionIDCounter = 0; //Connection Unique ID's.
 
 var clientAdminConnections = {}; //Stores all connections to this server, and their subscribed events.
 var clientAdminPerfConnections = {}; //Stores all connections to this server, and their subscribed events.
+var clientWorldDebugConnections = {};
 
 var resultSubscriptions = {}; // Stores all connections on a per-alert basis
 
@@ -5276,6 +5336,28 @@ wss.on('connection', function(clientConnection)
 
                         clientConnection.send('{"messageType": "subscribed"}');
                     }
+					else if (message.action == 'subscribe-world') {
+						console.log('Subscribing to world messages');
+						var worldID = message.worldID;
+						
+						if (!clientWorldDebugConnections[worldID])
+                        {
+                            clientWorldDebugConnections[worldID] = {};
+
+                            clientWorldDebugConnections[worldID][clientConnection.id] = clientConnection;
+                        }
+                        else
+                        {
+                            clientWorldDebugConnections[worldID][clientConnection.id] = clientConnection; // Put connection based on worldID into object to loop through
+                        }
+
+                        if (config.debug.clients == true)
+                        {
+                            console.log(success("SUBSCRIBED WEBSOCKET TO WORLD #"+worldID));
+                        }
+						
+						clientConnection.send('{"messageType": "subscribed"}');
+					}
                     else if (message.action == "timesync")
                     {
                         var clientTime = Math.floor(message.time);
@@ -5420,6 +5502,7 @@ wss.on('connection', function(clientConnection)
                         };
                         clientConnection.send(JSON.stringify(message));
                     }
+					
 
                     // End of message actions
                 }
