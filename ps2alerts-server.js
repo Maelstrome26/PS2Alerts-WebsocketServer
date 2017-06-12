@@ -4195,7 +4195,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 {
                                     if (err.errno != 1062) // If not a duplicate
                                     {
-                                        console.log(message);
+                                        console.log(err);
                                         reportError(err, "Insert Player Cache Record");
                                     }
                                 }
@@ -4290,7 +4290,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 {
                                     if (err.errno != 1062) // If not a duplicate
                                     {
-                                        console.log(message);
+                                        console.log(err);
                                         reportError(err, "Insert Vehicle Kills Total Record");
                                         throw(err);
                                     }
@@ -4341,7 +4341,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 {
                                     if (err.errno != 1062) // If not a duplicate
                                     {
-                                        console.log(message);
+                                        console.log(err);
                                         reportError(err, "Insert Vehicle Victim Record");
                                         throw(err);
                                     }
