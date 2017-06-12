@@ -1025,7 +1025,7 @@ function insertAlert(message, dbConnectionA, callback)
                     if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                     {
                         console.log(message);
-                        reportError(err, "Insert Capture Record");
+                        reportError(err, "Insert Capture Record - Duplicate / Deadlock");
                     }
                     else
                     {
@@ -4162,7 +4162,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     }
                 }
 
-                if (kID !== 0)
+                if (kID != 0)
                 {
                     // Killer Vehicle
                     dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Kquery+" WHERE vehicleID = "+kID+" AND resultID = "+resultID, function(err, result)
@@ -4257,7 +4257,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     });
                 }
 
-                if (vID !== 0)
+                if (vID != 0)
                 {
                     dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, function(err, result)
                     {
