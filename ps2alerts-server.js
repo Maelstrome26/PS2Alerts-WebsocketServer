@@ -1100,10 +1100,14 @@ function insertAlert(message, dbConnectionA, callback)
                                 suicidesVS: 0,
                                 suicidesNC: 0,
                                 suicidesTR: 0,
+								headshotsVS: 0,
+								headshotsNC: 0,
+								headshotsTR: 0,
                                 totalKills: 0,
                                 totalDeaths: 0,
                                 totalTKs: 0,
-                                totalSuicides: 0
+                                totalSuicides: 0,
+								totalHeadshots: 0
                             };
 
                             dbConnectionA.query('INSERT INTO ws_factions SET ?', factionArray, function(err, result)
@@ -2002,7 +2006,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
         playerKills = 0;
     }
 
-    var updateQuery = 'UPDATE ws_players SET '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'" AND resultID='+resultID;
+    var updateQuery = 'UPDATE ws_players SET playerBR = '+attackerBR+', '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'" AND resultID='+resultID;
 
     if (config.debug.combat === true)
     {
@@ -2057,7 +2061,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                 });
             }
 
-            var updateTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+attackerOutfit+'", playerServer = '+worldID+', playerFaction = '+attackerFID+', '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'"';
+            var updateTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+attackerOutfit+'", playerServer = '+worldID+', playerFaction = '+attackerFID+', playerBR = '+attackerBR+', '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'"';
 
             dbConnectionP.query(updateTotalQuery, function(err, resultB)
             {
@@ -2101,7 +2105,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
 
             if (attackerID != victimID) // Don't count them twice!
             {
-                var victimUpdateQuery = 'UPDATE ws_players SET '+vDeathQuery+' WHERE playerID="'+victimID+'" AND resultID='+resultID;
+                var victimUpdateQuery = 'UPDATE ws_players SET playerBR = '+victimBR+', '+vDeathQuery+' WHERE playerID="'+victimID+'" AND resultID='+resultID;
 
                 if (config.debug.combat === true)
                 {
@@ -2158,7 +2162,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                     }
                 });
 
-                var victimTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+ victimOutfit+'", '+vDeathQuery+' WHERE playerID="'+victimID+'"';
+                var victimTotalQuery = 'UPDATE ws_players_total playerOutfit = "'+victimOutfit+'", playerServer = '+worldID+', playerFaction = '+victimFID+', playerBR = '+victimBR+', '+vDeathQuery+' WHERE playerID="'+victimID+'"';
 
                 dbConnectionP.query(victimTotalQuery, function(err, resultC)
                 {
@@ -2254,7 +2258,7 @@ function batchUpdateFactionStats(callback)
                 console.log(JSON.stringify(object, null, 4));
             }
 
-            pool.query("UPDATE ws_factions SET killsVS=killsVS+"+object.killsVS+", killsNC=killsNC+"+object.killsNC+", killsTR=killsTR+"+object.killsTR+", deathsVS=deathsVS+"+object.deathsVS+", deathsNC=deathsNC+"+object.deathsNC+", deathsTR=deathsTR+"+object.deathsTR+", teamKillsVS=teamKillsVS+"+object.teamKillsVS+", teamKillsNC=teamKillsNC+"+object.teamKillsNC+", teamKillsTR=teamKillsTR+"+object.teamKillsTR+", suicidesVS=suicidesVS+"+object.suicidesVS+", suicidesNC=suicidesNC+"+object.suicidesNC+", suicidesTR=suicidesTR+"+object.suicidesTR+", totalKills=totalKills+"+object.totalKills+", totalDeaths=totalDeaths+"+object.totalDeaths+", totalTKs=totalTKs+"+object.totalTKs+", totalSuicides=totalSuicides+"+object.totalSuicides+" WHERE resultID = "+key, function(err, result)
+            pool.query("UPDATE ws_factions SET killsVS=killsVS+"+object.killsVS+", killsNC=killsNC+"+object.killsNC+", killsTR=killsTR+"+object.killsTR+", deathsVS=deathsVS+"+object.deathsVS+", deathsNC=deathsNC+"+object.deathsNC+", deathsTR=deathsTR+"+object.deathsTR+", teamKillsVS=teamKillsVS+"+object.teamKillsVS+", teamKillsNC=teamKillsNC+"+object.teamKillsNC+", teamKillsTR=teamKillsTR+"+object.teamKillsTR+", suicidesVS=suicidesVS+"+object.suicidesVS+", suicidesNC=suicidesNC+"+object.suicidesNC+", suicidesTR=suicidesTR+"+object.suicidesTR+", headshotsVS=headshotsVS+"+object.headshotsVS+", headshotsNC=headshotsNC+"+object.headshotsNC+", headshotsTR=headshotsTR+"+object.headshotsTR+", totalKills=totalKills+"+object.totalKills+", totalDeaths=totalDeaths+"+object.totalDeaths+", totalTKs=totalTKs+"+object.totalTKs+", totalSuicides=totalSuicides+"+object.totalSuicides+", totalHeadshots=totalHeadshots+"object.totalHeadshots+" WHERE resultID = "+key, function(err, result)
             {
                 if (err)
                 {
@@ -2606,10 +2610,14 @@ function updateFactionStats(message, resultID, combatArray, dbConnectionF)
             suicidesVS: 0,
             suicidesNC: 0,
             suicidesTR: 0,
+			headshotsVS: 0,
+            headshotsNC: 0,
+            headshotsTR: 0,
             totalKills: 0,
             totalDeaths: 0,
             totalTKs: 0,
-            totalSuicides: 0
+            totalSuicides: 0,
+			totalHeadshots: 0
         };
     }
 
@@ -2643,10 +2651,10 @@ function updateFactionStats(message, resultID, combatArray, dbConnectionF)
 
     if (combatArray.teamkill == "1") // If a TK
     {
-        kField = factionUpdates[resultID]['teamKills'+kFaction]++;
-        kField = factionUpdates[resultID]['deaths'+kFaction]++;
-        tField = factionUpdates[resultID]['totalTKs']++;
-        tField = factionUpdates[resultID]['totalDeaths']++;
+        factionUpdates[resultID]['teamKills'+kFaction]++;
+        factionUpdates[resultID]['deaths'+kFaction]++;
+        factionUpdates[resultID]['totalTKs']++;
+        factionUpdates[resultID]['totalDeaths']++;
 
         if (config.debug.combat === true)
         {
@@ -2660,10 +2668,10 @@ function updateFactionStats(message, resultID, combatArray, dbConnectionF)
             kFaction = vFaction;
         }
 
-        kField = factionUpdates[resultID]['suicides'+kFaction]++;
-        kField = factionUpdates[resultID]['deaths'+kFaction]++;
-        tField = factionUpdates[resultID]['totalSuicides']++;
-        tField = factionUpdates[resultID]['totalDeaths']++;
+        factionUpdates[resultID]['suicides'+kFaction]++;
+        factionUpdates[resultID]['deaths'+kFaction]++;
+        factionUpdates[resultID]['totalSuicides']++;
+        factionUpdates[resultID]['totalDeaths']++;
 
         if (config.debug.combat === true)
         {
@@ -2672,16 +2680,22 @@ function updateFactionStats(message, resultID, combatArray, dbConnectionF)
     }
     else // Must be a kill then
     {
-        kField = factionUpdates[resultID]['kills'+kFaction]++;
-        kField = factionUpdates[resultID]['deaths'+vFaction]++;
-        tField = factionUpdates[resultID]['totalKills']++;
-        tField = factionUpdates[resultID]['totalDeaths']++;
+        factionUpdates[resultID]['kills'+kFaction]++;
+        factionUpdates[resultID]['deaths'+vFaction]++;
+        factionUpdates[resultID]['totalKills']++;
+        factionUpdates[resultID]['totalDeaths']++;
 
         if (config.debug.combat === true)
         {
             console.log(success("KILL"));
         }
+		
+		if (combatArray.headshot == '1') {
+			factionUpdates[resultID]['headshots'+kFaction]++;
+			factionUpdates[resultID]['totalHeadshots']++;
+		}
     }
+
 
     if (config.debug.combat === true)
     {
@@ -2689,8 +2703,6 @@ function updateFactionStats(message, resultID, combatArray, dbConnectionF)
         console.log(vFaction);
         console.log("----");
     }
-
-    dField = 'deaths'+vFaction;
 }
 
 /* IDs
