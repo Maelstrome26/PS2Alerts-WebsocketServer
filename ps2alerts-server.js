@@ -2162,7 +2162,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                     }
                 });
 
-                var victimTotalQuery = 'UPDATE ws_players_total playerOutfit = "'+victimOutfit+'", playerServer = '+worldID+', playerFaction = '+victimFID+', playerBR = '+victimBR+', '+vDeathQuery+' WHERE playerID="'+victimID+'"';
+                var victimTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+victimOutfit+'", playerServer = '+worldID+', playerFaction = '+victimFID+', playerBR = '+victimBR+', '+vDeathQuery+' WHERE playerID="'+victimID+'"';
 
                 dbConnectionP.query(victimTotalQuery, function(err, resultC)
                 {
