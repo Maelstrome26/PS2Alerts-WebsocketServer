@@ -2038,6 +2038,8 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
 					playerBR: attackerBR,
                     headshots: headshot,
                 };
+				
+				console.log('attackerName', attackerName);
 
                 dbConnectionP.query('INSERT INTO ws_players SET ?', playerArrayKills, function(err, result)
                 {
