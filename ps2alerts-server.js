@@ -4404,7 +4404,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 console.log(resultID);
                             }
 
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles SET ?" vehiclePlayerDeathObject, function(err, result)
+                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles SET ?", vehiclePlayerDeathObject, function(err, result)
                             {
                                 if (err)
                                 {
