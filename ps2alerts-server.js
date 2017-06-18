@@ -4129,47 +4129,101 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     }
                 }
 
+				var vehicleTotalKillObject = {
+					vehicleID: kID,
+					killCount: 1,
+					killICount: 0,
+					killVCount: 0,
+					deathCount: 0,
+					deathICount: 0,
+					deathVCount: 0,
+					bails: 0,
+					resultID: resultID
+				}
+				
+				var vehicleTotalDeathObject = {
+					vehicleID: vID,
+					killCount: 0,
+					killICount: 0,
+					killVCount: 0,
+					deathCount: 1,
+					deathICount: 0,
+					deathVCount: 0,
+					bails: 0,
+					resultID: resultID
+				}
+
+                var vehiclePlayerKillObject = {
+					vehicleID: kID,
+                    playerID: killerID,
+					killCount: 1,
+					killICount: 0,
+					killVCount: 0,
+					deathCount: 0,
+					deathICount: 0,
+					deathVCount: 0,
+					bails: 0,
+					resultID: resultID
+				}
+
+                var vehiclePlayerDeathObject = {
+					vehicleID: vID,
+                    playerID: victimID,
+					killCount: 0,
+					killICount: 0,
+					killVCount: 0,
+					deathCount: 1,
+					deathICount: 0,
+					deathVCount: 0,
+					bails: 0,
+					resultID: resultID
+				}
+
                 switch(type)
                 {
                     case 1: // V->V w/ Occ
                     {
                         Kquery = "killCount=killCount+1, killVCount=killVCount+1";
                         Vquery = "deathCount=deathCount+1, deathVCount=deathVCount+1";
-                        iQueryK = kID+", "+killerID+", 1, 0, 1, 0, 0, 0, 0, "+resultID;
-                        iQueryV = vID+", "+victimID+", 0, 0, 0, 1, 0, 1, 0, "+resultID;
-                        pQueryK = kID+", "+killerID+", 1, 0, 1, 0, 0, 0, 0, "+resultID;
-                        pQueryV = vID+", "+victimID+", 0, 0, 0, 1, 0, 1, 0, "+resultID;
+                        vehicleTotalKillObject.killVCount = 1;
+                        vehiclePlayerKillObject.killVCount = 1;
+						vehicleTotalDeathObject.deathVCount = 1;
+                        vehiclePlayerDeathObject.deathVCount = 1;
                         break;
                     }
                     case 11: // I->V w/ Occ
                     {
                         Vquery = "deathCount=deathCount+1, deathICount=deathICount+1";
-                        iQueryV = vID+", 0, 0, 0, 1, 1, 0, 0, "+resultID;
-                        pQueryV = vID+", "+victimID+", 0, 0, 0, 1, 1, 0, 0, "+resultID;
+                        vehicleTotalDeathObject.deathICount = 1;
+                        vehiclePlayerDeathObject.deathICount = 1;
                         break;
                     }
                     case 2: // V->V no Occ
                     {
                         Kquery = "killCount=killCount+1, killVCount=killVCount+1";
                         Vquery = "deathCount=deathCount+1, deathVCount=deathVCount+1, bails=bails+1";
-                        iQueryK = kID+", "+killerID+", 1, 0, 1, 0, 0, 0, 0, "+resultID;
-                        iQueryV = vID+", "+victimID+", 0, 0, 0, 1, 0, 1, 1, "+resultID;
-                        pQueryK = resultID+", "+kID+", "+killerID+", 1, 0, 1, 0, 0, 0, 0";
-                        pQueryV = resultID+", "+vID+", "+victimID+", 0, 0, 0, 1, 0, 1, 1";
+                        vehicleTotalKillObject.killVCount = 1;
+						vehiclePlayerKillObject.killVCount = 1;
+						vehicleTotalDeathObject.deathVCount = 1;
+                        vehicleTotalDeathObject.bails = 1;
+                        vehiclePlayerDeathObject.deathVCount = 1;
+						vehiclePlayerDeathObject.bails = 1;
                         break;
                     }
                     case 22: // I->V no Occ
                     {
                         Vquery = "deathCount=deathCount+1, deathICount=deathICount+1, bails=bails+1";
-                        iQueryV = vID+", "+victimID+", 0, 0, 0, 1, 1, 0, 1, "+resultID;
-                        pQueryV = vID+", "+victimID+", 0, 0, 0, 1, 1, 0, 1, "+resultID;
+						vehicleTotalDeathObject.deathICount = 1;
+						vehicleTotalDeathObject.bails = 1;
+                        vehiclePlayerDeathObject.deathICount = 1;
+						vehiclePlayerDeathObject.bails = 1;
                         break;
                     }
                     case 3: // V->I
                     {
                         Kquery = "killCount=killCount+1, killICount=killICount+1";
-                        iQueryK = kID+", "+killerID+", 1, 1, 0, 0, 0, 0, 0, "+resultID;
-                        pQueryK = kID+", "+killerID+", 1, 1, 0, 0, 0, 0, 0, "+resultID;
+                        vehicleTotalKillObject.killICount = 1;
+						vehiclePlayerKillObject.killICount = 1;
                         break;
                     }
                 }
@@ -4198,17 +4252,16 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 console.log("Inserting New Killer Vehicle Record");
                                 console.log(kID);
                                 console.log(resultID);
-                                console.log(iQueryK);
                             }
 
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles_totals (vehicleID, killCount, killICount, killVCount, deathCount, deathICount, deathVCount, bails, resultID) VALUES ("+iQueryK+")", function(err, result)
+                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalKillObject, function(err, result)
                             {
                                 if (err)
                                 {
                                     if (err.errno != 1062) // If not a duplicate
                                     {
                                         console.log(err);
-                                        reportError(err, "Insert Player Cache Record");
+                                        reportError(err, "Insert ws_vehicles_totals");
                                     }
                                 }
                             });
@@ -4236,16 +4289,15 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 console.log("Inserting New Killer Vehicle Record");
                                 console.log(kID);
                                 console.log(resultID);
-                                console.log(iQueryK);
                             }
 
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles (vehicleID, playerID, killCount, killICount, killVCount, deathCount, deathICount, deathVCount, bails, resultID) VALUES ("+iQueryK+")", function(err, result)
+                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles SET ?", vehiclePlayerKillObject, function(err, result)
                             {
                                 if (err)
                                 {
                                     if (err.errno != 1062) // If not a duplicate
                                     {
-                                        reportError(err, "Insert Vehicle Kill Record");
+                                        reportError(err, "Insert Vehicle Player Kill Record");
                                         throw(err);
                                     }
                                 }
@@ -4257,7 +4309,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                         {
                                             if (err.errno === 1213) // If deadlock
                                             {
-                                                console.log(critical("DEADLOCK DETECTED (Vehicles Kill)"));
+                                                console.log(critical("DEADLOCK DETECTED (Vehicles Player Kill)"));
 
                                                 handleDeadlock("UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID, "Vehicle Update", 0);
                                             }
@@ -4271,18 +4323,21 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
 
                 if (vID != 0)
                 {
+					// Victim Vehicle
                     dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, function(err, result)
                     {
                         if (err)
                         {
                             if (err.errno === 1213) // If deadlock
                             {
-                                console.log(critical("DEADLOCK DETECTED (Vehicles)"));
+                                console.log(critical("DEADLOCK DETECTED (Update Vehicle Victim Total Record)"));
 
                                 handleDeadlock("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, "Vehicle Update", 0);
                             }
                             else
                             {
+                                console.log(err);
+								reportError(err, "Update Vehicle Victim Total Record");
                                 throw(err);
                             }
 
@@ -4291,19 +4346,19 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                         {
                             if (config.debug.vehicles === true)
                             {
-                                console.log("Inserting New Victim Vehicle Record");
+                                console.log("Inserting New Victim Vehicle Total Record");
                                 console.log(vID);
                                 console.log(resultID);
                             }
 
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles_totals (vehicleID, killCount, killICount, killVCount, deathCount, deathICount, deathVCount, bails, resultID) VALUES ("+iQueryV+")", function(err, result)
+                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalDeathObject, function(err, result)
                             {
                                 if (err)
                                 {
                                     if (err.errno != 1062) // If not a duplicate
                                     {
                                         console.log(err);
-                                        reportError(err, "Insert Vehicle Kills Total Record");
+                                        reportError(err, "Inserting New Victim Vehicle Total Record #2");
                                         throw(err);
                                     }
                                 }
@@ -4334,6 +4389,8 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                             }
                             else
                             {
+								console.log(err);
+								reportError(err, "Insert Vehicle Player Victim Record");
                                 throw(err);
                             }
 
@@ -4347,19 +4404,19 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 console.log(resultID);
                             }
 
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles (vehicleID, playerID, killCount, killICount, killVCount, deathCount, deathICount, deathVCount, bails, resultID) VALUES ("+pQueryV+")", function(err, result)
+                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles SET ?" vehiclePlayerDeathObject, function(err, result)
                             {
                                 if (err)
                                 {
                                     if (err.errno != 1062) // If not a duplicate
                                     {
                                         console.log(err);
-                                        reportError(err, "Insert Vehicle Victim Record");
+                                        reportError(err, "Insert Vehicle Player Victim Record #2");
                                         throw(err);
                                     }
                                     else
                                     {
-                                        handleDeadlock("UPDATE ws_vehicles SET "+Vquery+" WHERE resultID = "+resultID+" AND playerID='"+victimID+"' AND vehicleID="+vID, "Vehicle Update", 0);
+                                        handleDeadlock("UPDATE ws_vehicles SET "+Vquery+" WHERE resultID = "+resultID+" AND playerID='"+victimID+"' AND vehicleID="+vID, "Vehicle Player Victim Update", 0);
                                     }
                                 }
                             });
