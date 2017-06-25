@@ -4975,7 +4975,7 @@ function handleDeadlock(query, location, tries)
 
                     if (result)
                     {
-                        if (result.affectedRows > 0)
+                        if (result.affectedRows > 0 && config.debug.deadlocks === true)
                         {
                             console.log(warning("Deadlock / Duplicate handled! Location: "+location));
                         }
