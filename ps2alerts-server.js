@@ -1389,8 +1389,6 @@ function updateMapData(message, resultID, insert, dbConnectionMap, callback)
                                 {
                                     throw(err);
                                 }
-
-                                console.log("Incremented Outfit Captures");
                             });
                         }
 
@@ -5764,7 +5762,13 @@ var maintenance = setInterval(function()
         if (config.debug.instances === true)
         {
             console.log(notice("=========== CURRENT ALERTS IN PROGRESS: ==========="));
-            console.log(instances);
+
+       		Object.keys(instances).forEach(function(i) {
+       			console.log('Result: ' + instances[i].resultID);
+       			console.log('W: ' + instances[i].world + ' - Z: ' + instances[i].zone);
+       			console.log('VS: ' + instances[i].controlVS + ' - NC: ' + instances[i].controlNC + ' - TR: ' + instances[i].controlTR);
+       			console.log('Remaining: ' + instances[i].remaining);
+       		});
         }
     });
 
