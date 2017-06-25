@@ -2048,6 +2048,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                         if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                         {
                             reportError(err, "Insert Initial Player Kill Stats");
+                            console.log('Player Name:', attackerName);
                         }
                         else
                         {
@@ -2095,6 +2096,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                             if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                             {
                                 reportError(err, "Insert Initial Player Total Stats (Attacker)", 0);
+                                console.log('Player Name:', attackerName);
                             }
                             else
                             {
@@ -2148,6 +2150,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                                     if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                     {
                                         reportError(err, "Insert Initial Player Death Stats");
+                                        console.log('Player Name:', victimName);
                                     }
                                     else
                                     {
@@ -2195,6 +2198,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                                 if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
                                 {
                                     reportError(err, "Insert Initial Player Total Death Stats");
+                                    console.log('Player Name:', victimName);
                                 }
                                 else
                                 {
