@@ -5764,7 +5764,7 @@ var maintenance = setInterval(function()
             console.log(notice("=========== CURRENT ALERTS IN PROGRESS: ==========="));
 
        		Object.keys(instances).forEach(function(i) {
-       			console.log('Result: ' + instances[i].resultID);
+       			console.log('===== Result: ' + instances[i].resultID + ' =====');
        			console.log('W: ' + instances[i].world + ' - Z: ' + instances[i].zone);
        			console.log('VS: ' + instances[i].controlVS + ' - NC: ' + instances[i].controlNC + ' - TR: ' + instances[i].controlTR);
        			console.log('Remaining: ' + instances[i].remaining);
