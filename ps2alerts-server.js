@@ -923,14 +923,14 @@ function resetScript() {
 
 /**
  * message = {
- * 		world_id,
- * 		zone_id,
- * 		metagame_event_type_id,
- * 		start_time,
- * 		control_vs,
- * 		control_nc,
- * 		control_tr,
- * 		instance_id
+ *      world_id,
+ *      zone_id,
+ *      metagame_event_type_id,
+ *      start_time,
+ *      control_vs,
+ *      control_nc,
+ *      control_tr,
+ *      instance_id
  * }
  */
 
@@ -1100,14 +1100,14 @@ function insertAlert(message, dbConnectionA, callback)
                                 suicidesVS: 0,
                                 suicidesNC: 0,
                                 suicidesTR: 0,
-								headshotsVS: 0,
-								headshotsNC: 0,
-								headshotsTR: 0,
+                                headshotsVS: 0,
+                                headshotsNC: 0,
+                                headshotsTR: 0,
                                 totalKills: 0,
                                 totalDeaths: 0,
                                 totalTKs: 0,
                                 totalSuicides: 0,
-								totalHeadshots: 0
+                                totalHeadshots: 0
                             };
 
                             dbConnectionA.query('INSERT INTO ws_factions SET ?', factionArray, function(err, result)
@@ -1226,7 +1226,7 @@ function endAlert(message, resultID, client, dbConnectionA, callback)
                                                         "zone": zone
                                                     };
                                                     console.log(notice("Websocket Message: "));
-													console.log(notice(JSON.stringify(toSend, null, 4)));
+                                                    console.log(notice(JSON.stringify(toSend, null, 4)));
 
                                                     sendMonitor("alertEnd", toSend);
                                                     sendResult("alertEnd", toSend, resultID);
@@ -1516,13 +1516,13 @@ function combatParse(message, resultID, dbConnectionCache)
                 attackerOutfit: killerOutfit,
                 attackerFaction: message.attacker_faction_id,
                 attackerLoadout: message.attacker_loadout_id,
-				attackerBR: killerBR,
+                attackerBR: killerBR,
                 victimID: victimID,
                 victimName: victimName,
                 victimOutfit: victimOutfit,
                 victimFaction: message.victim_faction_id,
                 victimLoadout: message.victim_loadout_id,
-				victimBR: victimBR,
+                victimBR: victimBR,
                 weaponID: message.weapon_id,
                 vehicleID: message.vehicle_id,
                 headshot: message.is_headshot,
@@ -1599,7 +1599,7 @@ function combatParse(message, resultID, dbConnectionCache)
                         
                         // console.log(JSON.stringify(combatArray, null, 4));
                         sendResult("combat", combatArray, resultID);
-						sendWorld('Combat', JSON.stringify(combatArray), combatArray.worldID);
+                        sendWorld('Combat', JSON.stringify(combatArray), combatArray.worldID);
 
                         insertCombatRecord(message, resultID, combatArray, dbConnectionC, function()
                         {
@@ -1632,13 +1632,13 @@ function insertCombatRecord(message, resultID, combatArray, dbConnectionC, callb
             attackerOutfit: combatArray.attackerOutfit,
             attackerFaction: combatArray.attackerFaction,
             attackerLoadout: combatArray.attackerLoadout,
-			attackerBR: combatArray.attackerBR,
+            attackerBR: combatArray.attackerBR,
             victimID: combatArray.victimID,
             victimName: combatArray.victimName,
             victimOutfit: combatArray.victimOutfit,
             victimFaction: combatArray.victimFaction,
             victimLoadout: combatArray.victimLoadout,
-			victimBR: combatArray.victimBR,
+            victimBR: combatArray.victimBR,
             weaponID: combatArray.weaponID,
             vehicleID: combatArray.vehicleID,
             headshot: combatArray.headshot,
@@ -1933,8 +1933,8 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
     var victimFID = combatArray.victimFaction;
     var attackerName = combatArray.attackerName;
     var victimName = combatArray.victimName;
-	var attackerBR = combatArray.attackerBR;
-	var victimBR = combatArray.victimBR;
+    var attackerBR = combatArray.attackerBR;
+    var victimBR = combatArray.victimBR;
     var timestamp = combatArray.timestamp;
     var headshot = combatArray.headshot;
     var worldID = combatArray.worldID;
@@ -2033,10 +2033,10 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                     playerDeaths: playerDeaths,
                     playerTeamKills: teamKill,
                     playerSuicides: suicide,
-					playerBR: attackerBR,
+                    playerBR: attackerBR,
                     headshots: headshot,
                 };
-				
+                
                 dbConnectionP.query('INSERT INTO ws_players SET ?', playerArrayKills, function(err, result)
                 {
                     if (err)
@@ -2081,7 +2081,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                         playerTeamKills: teamKill,
                         playerSuicides: suicide,
                         headshots: headshot,
-						playerBR: attackerBR,
+                        playerBR: attackerBR,
                         playerServer: worldID
                     };
 
@@ -2135,7 +2135,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                                 playerDeaths: 1,
                                 playerTeamKills: 0,
                                 playerSuicides: 0,
-								playerBR: victimBR,
+                                playerBR: victimBR,
                                 headshots: 0,
                             };
 
@@ -2183,7 +2183,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                             playerDeaths: 1,
                             playerTeamKills: 0,
                             playerSuicides: 0,
-							playerBR: victimBR,
+                            playerBR: victimBR,
                             headshots: 0,
                         };
 
@@ -2612,14 +2612,14 @@ function updateFactionStats(message, resultID, combatArray, dbConnectionF)
             suicidesVS: 0,
             suicidesNC: 0,
             suicidesTR: 0,
-			headshotsVS: 0,
+            headshotsVS: 0,
             headshotsNC: 0,
             headshotsTR: 0,
             totalKills: 0,
             totalDeaths: 0,
             totalTKs: 0,
             totalSuicides: 0,
-			totalHeadshots: 0
+            totalHeadshots: 0
         };
     }
 
@@ -2691,11 +2691,11 @@ function updateFactionStats(message, resultID, combatArray, dbConnectionF)
         {
             console.log(success("KILL"));
         }
-		
-		if (combatArray.headshot == '1') {
-			factionUpdates[resultID]['headshots'+kFaction]++;
-			factionUpdates[resultID]['totalHeadshots']++;
-		}
+        
+        if (combatArray.headshot == '1') {
+            factionUpdates[resultID]['headshots'+kFaction]++;
+            factionUpdates[resultID]['totalHeadshots']++;
+        }
     }
 
 
@@ -3253,19 +3253,19 @@ function sendAdmins(messageType, message) // Sends message to WS Clients
         }
         else
         {
-			Object.keys(clientAdminConnections).forEach(function(key)
-			{
-				var clientConnection = clientAdminConnections[key];
+            Object.keys(clientAdminConnections).forEach(function(key)
+            {
+                var clientConnection = clientAdminConnections[key];
 
-				clientConnection.send(JSON.stringify(messageToSend), function(error)
-				{
-					if (error)
-					{
-						console.log(critical("Websocket Admin Error: "+error));
-						delete clientAdminConnections[clientConnection.id];
-					}
-				});
-			});
+                clientConnection.send(JSON.stringify(messageToSend), function(error)
+                {
+                    if (error)
+                    {
+                        console.log(critical("Websocket Admin Error: "+error));
+                        delete clientAdminConnections[clientConnection.id];
+                    }
+                });
+            });
         }
 
         if (config.debug.clients === true && messageType !== "perf" && messageType !== "keepalive")
@@ -3289,28 +3289,28 @@ function sendWorld(messageType, message, world) // Sends message to WS Clients f
         messageToSend.data = message;
         messageToSend.messageType = messageType;
 
-		if (clientWorldDebugConnections[world]) // If script was too quick for subscription
-		{
-			Object.keys(clientWorldDebugConnections[world]).forEach(function(key)
-			{
-				var clientConnection = clientWorldDebugConnections[world][key];
+        if (clientWorldDebugConnections[world]) // If script was too quick for subscription
+        {
+            Object.keys(clientWorldDebugConnections[world]).forEach(function(key)
+            {
+                var clientConnection = clientWorldDebugConnections[world][key];
 
-				clientConnection.send(JSON.stringify(messageToSend), function(error)
-				{
-					if (error)
-					{
-						delete clientConnections[clientConnection.id];
-						delete clientWorldDebugConnections[world][clientConnection.id];
+                clientConnection.send(JSON.stringify(messageToSend), function(error)
+                {
+                    if (error)
+                    {
+                        delete clientConnections[clientConnection.id];
+                        delete clientWorldDebugConnections[world][clientConnection.id];
 
-						if (config.debug.clients === true)
-						{
-							console.log(notice("Websocket connection closed - Total: "+Object.keys(clientConnections).length));
-						}
-						console.log(critical("Client Error: "+error));
-					}
-				});
-			});
-		}
+                        if (config.debug.clients === true)
+                        {
+                            console.log(notice("Websocket connection closed - Total: "+Object.keys(clientConnections).length));
+                        }
+                        console.log(critical("Client Error: "+error));
+                    }
+                });
+            });
+        }
 
         if (config.debug.keepalive === true && messageType != "keepalive")
         {
@@ -3474,7 +3474,7 @@ function findPlayerName(playerID, world, callback)
 
                                 var name = returned.character_list[0].name.first;
                                 var faction = returned.character_list[0].faction_id;
-								var br = returned.character_list[0].battle_rank.value;
+                                var br = returned.character_list[0].battle_rank.value;
 
                                 callback(name, faction, br);
                             }
@@ -3621,7 +3621,7 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
                             playerID: playerID,
                             playerName: name,
                             playerFaction: faction,
-							playerBR: br,
+                            playerBR: br,
                             expires: cacheExpires
                         };
 
@@ -4115,55 +4115,55 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     }
                 }
 
-				var vehicleTotalKillObject = {
-					vehicleID: kID,
-					killCount: 1,
-					killICount: 0,
-					killVCount: 0,
-					deathCount: 0,
-					deathICount: 0,
-					deathVCount: 0,
-					bails: 0,
-					resultID: resultID
-				}
-				
-				var vehicleTotalDeathObject = {
-					vehicleID: vID,
-					killCount: 0,
-					killICount: 0,
-					killVCount: 0,
-					deathCount: 1,
-					deathICount: 0,
-					deathVCount: 0,
-					bails: 0,
-					resultID: resultID
-				}
+                var vehicleTotalKillObject = {
+                    vehicleID: kID,
+                    killCount: 1,
+                    killICount: 0,
+                    killVCount: 0,
+                    deathCount: 0,
+                    deathICount: 0,
+                    deathVCount: 0,
+                    bails: 0,
+                    resultID: resultID
+                }
+                
+                var vehicleTotalDeathObject = {
+                    vehicleID: vID,
+                    killCount: 0,
+                    killICount: 0,
+                    killVCount: 0,
+                    deathCount: 1,
+                    deathICount: 0,
+                    deathVCount: 0,
+                    bails: 0,
+                    resultID: resultID
+                }
 
                 var vehiclePlayerKillObject = {
-					vehicleID: kID,
+                    vehicleID: kID,
                     playerID: killerID,
-					killCount: 1,
-					killICount: 0,
-					killVCount: 0,
-					deathCount: 0,
-					deathICount: 0,
-					deathVCount: 0,
-					bails: 0,
-					resultID: resultID
-				}
+                    killCount: 1,
+                    killICount: 0,
+                    killVCount: 0,
+                    deathCount: 0,
+                    deathICount: 0,
+                    deathVCount: 0,
+                    bails: 0,
+                    resultID: resultID
+                }
 
                 var vehiclePlayerDeathObject = {
-					vehicleID: vID,
+                    vehicleID: vID,
                     playerID: victimID,
-					killCount: 0,
-					killICount: 0,
-					killVCount: 0,
-					deathCount: 1,
-					deathICount: 0,
-					deathVCount: 0,
-					bails: 0,
-					resultID: resultID
-				}
+                    killCount: 0,
+                    killICount: 0,
+                    killVCount: 0,
+                    deathCount: 1,
+                    deathICount: 0,
+                    deathVCount: 0,
+                    bails: 0,
+                    resultID: resultID
+                }
 
                 var nanites = vehNanite[vID];
 
@@ -4175,7 +4175,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                         Vquery = "deathCount=deathCount+1, deathVCount=deathVCount+1";
                         vehicleTotalKillObject.killVCount = 1;
                         vehiclePlayerKillObject.killVCount = 1;
-						vehicleTotalDeathObject.deathVCount = 1;
+                        vehicleTotalDeathObject.deathVCount = 1;
                         vehiclePlayerDeathObject.deathVCount = 1;
                         break;
                     }
@@ -4191,27 +4191,27 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                         Kquery = "killCount=killCount+1, killVCount=killVCount+1";
                         Vquery = "deathCount=deathCount+1, deathVCount=deathVCount+1, bails=bails+1";
                         vehicleTotalKillObject.killVCount = 1;
-						vehiclePlayerKillObject.killVCount = 1;
-						vehicleTotalDeathObject.deathVCount = 1;
+                        vehiclePlayerKillObject.killVCount = 1;
+                        vehicleTotalDeathObject.deathVCount = 1;
                         vehicleTotalDeathObject.bails = 1;
                         vehiclePlayerDeathObject.deathVCount = 1;
-						vehiclePlayerDeathObject.bails = 1;
+                        vehiclePlayerDeathObject.bails = 1;
                         break;
                     }
                     case 22: // I->V no Occ
                     {
                         Vquery = "deathCount=deathCount+1, deathICount=deathICount+1, bails=bails+1";
-						vehicleTotalDeathObject.deathICount = 1;
-						vehicleTotalDeathObject.bails = 1;
+                        vehicleTotalDeathObject.deathICount = 1;
+                        vehicleTotalDeathObject.bails = 1;
                         vehiclePlayerDeathObject.deathICount = 1;
-						vehiclePlayerDeathObject.bails = 1;
+                        vehiclePlayerDeathObject.bails = 1;
                         break;
                     }
                     case 3: // V->I
                     {
                         Kquery = "killCount=killCount+1, killICount=killICount+1";
                         vehicleTotalKillObject.killICount = 1;
-						vehiclePlayerKillObject.killICount = 1;
+                        vehiclePlayerKillObject.killICount = 1;
                         break;
                     }
                 }
@@ -4322,7 +4322,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
 
                 if (vID != 0)
                 {
-					// Victim Vehicle
+                    // Victim Vehicle
                     dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, function(err, result)
                     {
                         if (err)
@@ -4336,7 +4336,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                             else
                             {
                                 console.log(err);
-								reportError(err, "Update Vehicle Victim Total Record");
+                                reportError(err, "Update Vehicle Victim Total Record");
                                 throw(err);
                             }
 
@@ -4388,8 +4388,8 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                             }
                             else
                             {
-								console.log(err);
-								reportError(err, "Insert Vehicle Player Victim Record");
+                                console.log(err);
+                                reportError(err, "Insert Vehicle Player Victim Record");
                                 throw(err);
                             }
 
@@ -5416,11 +5416,11 @@ wss.on('connection', function(clientConnection)
 
                         clientConnection.send('{"messageType": "subscribed"}');
                     }
-					else if (message.action == 'subscribe-world') {
-						console.log('Subscribing to world messages');
-						var worldID = message.worldID;
-						
-						if (!clientWorldDebugConnections[worldID])
+                    else if (message.action == 'subscribe-world') {
+                        console.log('Subscribing to world messages');
+                        var worldID = message.worldID;
+                        
+                        if (!clientWorldDebugConnections[worldID])
                         {
                             clientWorldDebugConnections[worldID] = {};
 
@@ -5435,9 +5435,9 @@ wss.on('connection', function(clientConnection)
                         {
                             console.log(success("SUBSCRIBED WEBSOCKET TO WORLD #"+worldID));
                         }
-						
-						clientConnection.send('{"messageType": "subscribed"}');
-					}
+                        
+                        clientConnection.send('{"messageType": "subscribed"}');
+                    }
                     else if (message.action == "timesync")
                     {
                         var clientTime = Math.floor(message.time);
@@ -5582,7 +5582,7 @@ wss.on('connection', function(clientConnection)
                         };
                         clientConnection.send(JSON.stringify(message));
                     }
-					
+                    
 
                     // End of message actions
                 }
@@ -5772,12 +5772,12 @@ var maintenance = setInterval(function()
         {
             console.log(notice("=========== CURRENT ALERTS IN PROGRESS: ==========="));
 
-       		Object.keys(instances).forEach(function(i) {
-       			console.log('===== Result: ' + instances[i].resultID + ' =====');
-       			console.log('W: ' + instances[i].world + ' - Z: ' + instances[i].zone);
-       			console.log('VS: ' + instances[i].controlVS + ' - NC: ' + instances[i].controlNC + ' - TR: ' + instances[i].controlTR);
-       			console.log('Remaining: ' + instances[i].remaining);
-       		});
+            Object.keys(instances).forEach(function(i) {
+                console.log('===== Result: ' + instances[i].resultID + ' =====');
+                console.log('W: ' + instances[i].world + ' - Z: ' + instances[i].zone);
+                console.log('VS: ' + instances[i].controlVS + ' - NC: ' + instances[i].controlNC + ' - TR: ' + instances[i].controlTR);
+                console.log('Remaining: ' + instances[i].remaining);
+            });
         }
     });
 
@@ -5844,14 +5844,14 @@ function processActives(message) {
 
                 /**
                  * message = {
-                 * 		world_id,
-                 * 		zone_id,
-                 * 		metagame_event_type_id,
-                 * 		start_time,
-                 * 		control_vs,
-                 * 		control_nc,
-                 * 		control_tr,
-                 * 		instance_id
+                 *      world_id,
+                 *      zone_id,
+                 *      metagame_event_type_id,
+                 *      start_time,
+                 *      control_vs,
+                 *      control_nc,
+                 *      control_tr,
+                 *      instance_id
                  * }
                  */
 
