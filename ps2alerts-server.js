@@ -4311,13 +4311,13 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     var toSend = {
                         vehicleID: kID,
                         type: 'kill',
-                        iKill: vehicleTotalKillObject.killICount,
-                        vKill: vehicleTotalKillObject.killVCount,
+                        iMetric: vehicleTotalKillObject.killICount,
+                        vMetric: vehicleTotalKillObject.killVCount,
                         nanites: nanites,
                         resultID: resultID
                     };
 
-                    sendResult("vehicleKill", toSend, resultID);
+                    sendResult("vehicleCombat", toSend, resultID);
                 }
 
                 if (vID != 0)
@@ -4425,14 +4425,14 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     var toSend = {
                         vehicleID: vID,
                         type: 'death',
-                        iDeath: vehiclePlayerDeathObject.deathICount,
-                        vDeath: vehiclePlayerDeathObject.deathVCount,
+                        iMetric: vehiclePlayerDeathObject.deathICount,
+                        vMetric: vehiclePlayerDeathObject.deathVCount,
                         bail: vehiclePlayerDeathObject.bails,
                         nanites: nanites,
                         resultID: resultID
                     };
 
-                    sendResult("vehicleKill", toSend, resultID);
+                    sendResult("vehicleCombat", toSend, resultID);
                 }
             }
 
