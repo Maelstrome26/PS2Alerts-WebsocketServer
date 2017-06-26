@@ -4069,22 +4069,6 @@ setInterval(function()
 
                 incrementVehicleKills(3, killerVID, 0, resultID, killerID, victimID);
             }
-
-            var nanites = vehNanite[charFlags[charID].victimVID];
-
-            var array = {
-                "aCharID": charFlags[charID].charID,
-                "vCharID": charFlags[charID].vCharID,
-                "attackerName": charFlags[charID].aName,
-                "victimName": charFlags[charID].vName,
-                "timestamp": charFlags[charID].timestamp,
-                "killerVID": charFlags[charID].killerVID,
-                "victimVID": charFlags[charID].victimVID,
-                "nanites": nanites,
-                "resultID": charFlags[charID].resultID
-            };
-
-            sendResult("vehicleKill", array);
         }
         else
         {
@@ -4180,6 +4164,8 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
 					bails: 0,
 					resultID: resultID
 				}
+
+                var nanites = vehNanite[vID];
 
                 switch(type)
                 {
@@ -4321,6 +4307,17 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                             });
                         }
                     });
+
+                    var toSend = {
+                        vehicleID: kID,
+                        type: 'kill',
+                        iKill: vehicleTotalKillObject.killICount,
+                        vKill: vehicleTotalKillObject.killVCount,
+                        nanites: nanites,
+                        resultID: resultID
+                    };
+
+                    sendResult("vehicleKill", toSend, resultID);
                 }
 
                 if (vID != 0)
@@ -4424,6 +4421,18 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                             });
                         }
                     });
+
+                    var toSend = {
+                        vehicleID: vID,
+                        type: 'death',
+                        iDeath: vehiclePlayerDeathObject.deathICount,
+                        vDeath: vehiclePlayerDeathObject.deathVCount,
+                        bail: vehiclePlayerDeathObject.bails,
+                        nanites: nanites,
+                        resultID: resultID
+                    };
+
+                    sendResult("vehicleKill", toSend, resultID);
                 }
             }
 
