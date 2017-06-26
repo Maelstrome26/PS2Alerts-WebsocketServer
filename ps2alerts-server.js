@@ -8,8 +8,10 @@
 
 //Includes
 var WebSocket = require('ws');
-var mysql = require('mysql');
 var http = require('http');
+var https = require('https');
+var fs = require('fs');
+var mysql = require('mysql');
 var url = require('url');
 var clone = require('clone');
 var clc = require('cli-color');
@@ -5318,12 +5320,14 @@ var clientWorldDebugConnections = {};
 
 var resultSubscriptions = {}; // Stores all connections on a per-alert basis
 
-var WebSocketServer = require('ws').Server;
+// Set up the HTTPS server first before we pass on the websocket server
+const server = https.createServer({
+    cert: fs.readFileSync('./certs/cert.pem', 'utf8'),
+    key: fs.readFileSync('./certs/key.pem', 'utf8'),
+}).listen(config.serverPort);
 
-var wss = new WebSocketServer(
-{
-    port: config.serverPort,
-    clientTracking: false, //We do our own tracking.
+const wss = new WebSocket.Server({
+    server: server
 });
 
 wss.on('connection', function(clientConnection)
