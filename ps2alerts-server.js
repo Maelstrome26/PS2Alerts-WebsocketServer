@@ -4313,7 +4313,6 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                         type: 'kill',
                         iMetric: vehicleTotalKillObject.killICount,
                         vMetric: vehicleTotalKillObject.killVCount,
-                        nanites: nanites,
                         resultID: resultID
                     };
 
