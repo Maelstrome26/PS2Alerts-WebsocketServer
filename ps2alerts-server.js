@@ -1066,6 +1066,7 @@ function insertAlert(message, dbConnectionA, callback)
                         "controlVS": message.control_vs,
                         "controlNC": message.control_nc,
                         "controlTR": message.control_tr,
+                        "metagameEventID": alertType
                     };
 
                     toSend.remaining = (parseInt(toSend.endTime) - parseInt(toSend.startTime));
@@ -3835,15 +3836,26 @@ function calcWinners(message, resultID, Lresult, Fresult, dbConnection, callback
             return 0;
         });
 
-        winner = empires[0].empire; // Set the winner
+        // If Critical Mass Alert, calculate things differently
+        if (message.type_id >= 123 && message.type_id <= 134) {
+            calculateCriticalMassWinners(message, empires, Lresult[0], function(result) {
+                winner = result;
 
-        if (empires[0].score > 94) { // If cont lock, count as domination
-            domination = 1;
-        } else if (duration < 5390) { // If ended early, must be VP victory / domination
-            domination = 1;
-        } else if (empires[0].score == empires[1].score) {
-            winner = "DRAW";
-            draw = 1;
+                if (duration < 1790) { // If ended early, must be domination (somehow)
+                    domination = 1;
+                }
+            });
+        } else {
+            winner = empires[0].empire; // Set the winner
+
+            if (empires[0].score > 94) { // If cont lock, count as domination
+                domination = 1;
+            } else if (duration < 5390) { // If ended early, must be VP victory / domination
+                domination = 1;
+            } else if (empires[0].score == empires[1].score) {
+                winner = "DRAW";
+                draw = 1;
+            }
         }
 
         console.log('Duration', duration);
@@ -3855,12 +3867,40 @@ function calcWinners(message, resultID, Lresult, Fresult, dbConnection, callback
     });
 }
 
+function calculateCriticalMassWinners(message, empires, mapResult, callback)
+{
+    APIAlertTypes(message.type_id, function(result) {
+        var metaInfo = result;
+        var triggeringFactionWon = false;
+        var winner = false;
+
+        console.log('metaInfo', metaInfo);
+
+        var triggeringFaction = metaInfo.faction;
+
+        // Check if the triggering faction won as they need to keep 36% to win outright
+        if (mapResult['control' + triggeringFaction] >= 36) {
+            console.log('Triggering faction won!', triggeringFaction);
+            triggeringFactionWon = true;
+            winner = triggeringFaction;
+        } else {
+            // Check for the "bullshit zone" of 33-35% where the triggering empire could have "won" by excluding that empire
+            winner = empires[0].empire;
+            if (empires[0].score === empires[1].score) {
+                winner = "DRAW";
+            }
+        }
+        return callback([winner, triggeringFactionWon]);
+    });
+}
+
 /* Helper Functions */
 
 function APIAlertTypes(eventID, callback)
 {
     var type = null;
     var cont = null;
+    var faction = null;
 
     switch (eventID)
     {
@@ -3948,6 +3988,51 @@ function APIAlertTypes(eventID, callback)
             type = "Territory";
             cont = "Hossin";
             break;
+        case '123':
+        case '124':
+        case '125':
+            type = "CriticalMass";
+            cont = "Indar";
+            break;
+        case '126':
+        case '127':
+        case '128':
+            type = "CriticalMass";
+            cont = "Esamir";
+            break;
+        case '129':
+        case '130':
+        case '131':
+            type = "CriticalMass";
+            cont = "Hossin";
+            break;
+        case '132':
+        case '133':
+        case '134':
+            type = "CriticalMass";
+            cont = "Amerish";
+            break;
+    }
+
+    switch (eventID) {
+        case '124':
+        case '127':
+        case '130':
+        case '133':
+            faction = "VS";
+            break;
+        case '125':
+        case '128':
+        case '131':
+        case '134':
+            faction = "NC";
+            break;
+        case '123':
+        case '126':
+        case '129':
+        case '132':
+            faction = "TR";
+            break;
     }
 
     var result = null;
@@ -3957,7 +4042,8 @@ function APIAlertTypes(eventID, callback)
         result =
         {
             type: type,
-            cont: cont
+            cont: cont,
+            faction: faction
         };
     }
 
