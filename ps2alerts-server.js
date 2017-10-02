@@ -5379,20 +5379,33 @@ function checkDuplicateMessages(message, callback)
 
 function calcEndTime(started, type) // Calculates estimated end time of an alert based off type and start time
 {
+    var toAdd;
     switch(type)
     {
         case "1":
         case "2":
         case "3":
-        case "4":
-        {
-            var toAdd = 5400;
+        case "4": {
+            toAdd = 5400;
+            break;
         }
+        case '123':
+        case '124':
+        case '125':
+        case '126':
+        case '127':
+        case '128':
+        case '129':
+        case '130':
+        case '131':
+        case '132':
+        case '133':
+        case '134':
+            toAdd = 1800;
+            break;
     }
 
-    var endtime = parseInt(started) + toAdd;
-
-    return endtime;
+    return parseInt(started) + toAdd;
 }
 
 // =================== SERVER ===============================
