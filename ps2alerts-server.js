@@ -21,7 +21,6 @@ var notice = clc.blueBright;
 var success = clc.green.bold;
 var usage = require('usage');
 var pid = process.pid; // you can use any valid PID instead
-var nodemailer = require('nodemailer');
 
 var configStore = require('./config.js');
 var config = configStore.getConfig(); // Call the getConfig funtion to load the config
@@ -152,7 +151,7 @@ function checkAPIKey(APIKey, callback)
 
                 username = apiKeys[i].user;
 
-                if (apiKeys[i].admin != "0") // If an admin
+                if (parseInt(apiKeys[i].admin) !== 0) // If an admin
                 {
                     admin = true;
                 }
@@ -189,7 +188,7 @@ generate_weapons(function() // Generate weapons first, before loading websocket
 /**************
     Client    *
 **************/
-function persistentClient(wss)
+function persistentClient()
 {
     console.log("HOUSTON WE ARE A GO!");
     var connected = true;
@@ -466,14 +465,14 @@ function processMessage(messageData, client, dbConnection)
                                         }
                                         else
                                         {
-                                            reportError("UNDEFINED RESULTID ALERT END - World: "+world, "End Alert");
+                                            reportError("UNDEFINED RESULT ID ALERT END - World: "+world, "End Alert");
                                         }
                                     }
                                     else if (alertStatus === 2)
                                     {
                                         if (config.debug.metagame === true)
                                         {
-                                            console.log("Alert update recieved.");
+                                            console.log("Alert update received.");
                                         }
                                     }
                                 });
@@ -3935,7 +3934,7 @@ function APIAlertTypes(eventID, callback)
 var charFlags = {};
 var charIDs = [];
 
-function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, resultID, attName, vicName, dbConnection)
+function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, resultID, attName, vicName)
 {
     if (!attName)
     {
@@ -4609,7 +4608,7 @@ function triggerLeaderboardUpdate(world) {
 
     http.get(url, function(res) {
         if (res.statusCode === 202) {
-            console.log(success("Successfully updated Leaderboard Endpoint for server:" + server))
+            console.log(success("Successfully updated Leaderboard Endpoint for server:" + world))
         } else {
             console.log(critical("Leaderboard endpoint didn't accept update!"))
         }
@@ -4751,7 +4750,7 @@ function restoreSubs(dbConnectionI, callback)
 
         var time = new Date().getTime() / 1000;
 
-        for (i = 0; i < resultInstance.length; i++) // Loop through result array
+        for (var i = 0; i < resultInstance.length; i++) // Loop through result array
         {
             if (resultInstance[i].started < time) // If it requires a subscription now
             {
@@ -5217,6 +5216,8 @@ var clientWorldDebugConnections = {};
 
 var resultSubscriptions = {}; // Stores all connections on a per-alert basis
 
+var wss;
+
 if (config.toggles.https) {
     // Set up the HTTPS server first before we pass on the websocket server
     const server = https.createServer({
@@ -5224,14 +5225,14 @@ if (config.toggles.https) {
         key: fs.readFileSync('./certs/key.pem', 'utf8')
     }).listen(config.serverPort);
 
-    const wss = new WebSocket.Server({
+    wss = new WebSocket.Server({
         server: server
     });
 
 } else {
     var WebSocketServer = require('ws').Server;
 
-    var wss = new WebSocketServer({
+    wss = new WebSocketServer({
         port: config.serverPort,
         clientTracking: false //We do our own tracking.
     });
@@ -5435,7 +5436,7 @@ wss.on('connection', function(clientConnection)
                                 activeAlertsReply[world][zone] = {};
                                 activeAlertsReply[world][zone] = instances[key];
 
-                                var remaining = parseInt(instances[key].endTime) - serverTime;
+                                remaining = parseInt(instances[key].endTime) - serverTime;
 
                                 activeAlertsReply[world][zone].remaining = remaining;
                                 activeAlertsReply[world][zone].serverTime = serverTime;
