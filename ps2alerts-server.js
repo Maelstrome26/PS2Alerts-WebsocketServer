@@ -188,9 +188,12 @@ generate_weapons(function() // Generate weapons first, before loading websocket
 /**************
     Client    *
 **************/
+
+var client;
+
 function persistentClient()
 {
-    console.log("HOUSTON WE ARE A GO!");
+    console.log("HOUSTON, WE ARE GO FOR LAUNCH!");
     var connected = true;
 
     //Return Status of connection.
@@ -201,7 +204,7 @@ function persistentClient()
 
     console.log("Connecting Client...");
 
-    var client = new WebSocket('ws://push.api.blackfeatherproductions.com/?apikey='+config.extendedAPIKey); // Jhett's API
+    client = new WebSocket('ws://push.api.blackfeatherproductions.com/?apikey='+config.extendedAPIKey); // Jhett's API
 
     // Websocket Event callbacks
     client.on('open', function()
@@ -220,26 +223,18 @@ function persistentClient()
                 dbConnectionI.release();
             });
         });
+
+        setMaintenanceInterval();
     });
 
-    client.on('message', function(data, flags)
+    client.on('message', function(data)
     {
         if(config.debug.datadump === true)
         {
             console.log(data);
         }
 
-        pool.getConnection(function(poolErr, dbConnection)
-        {
-            if (poolErr)
-            {
-                console.log(poolErr);
-                throw(poolErr);
-            }
-
-            processMessage(data, client, dbConnection);
-            dbConnection.release();
-        });
+        processMessage(data, client);
     });
 
     client.on('error', function(error)
@@ -250,11 +245,9 @@ function persistentClient()
 
     client.on('close', function(code)
     {
-        if (config.debug.clients === true)
-        {
-            console.log((new Date()) + ' Websocket Connection Closed [' + code +']');
-        }
+        console.log(critical(new Date()) + ' CLIENT Websocket Connection Closed [' + code +']');
         connected = false;
+        clearInterval(maintInterval);
     });
 }
 
@@ -280,36 +273,26 @@ var worldStatus = { // Assuming online always at first run
     2001: 'online'
 };
 
-function checkMapInitial(callback)
+function checkMapInitial(dbConnectionMap, callback)
 {
-    pool.getConnection(function(poolErr, dbConnectionMap)
-    {
-        if (poolErr)
-        {
-            throw(poolErr);
-        }
+    Object.keys(instances).forEach(function(key) {
+        dbConnectionMap.query("SELECT * FROM ws_map_initial WHERE resultID = "+instances[key].resultID, function(err, result) {
+            if (err)
+            {
+                throw(err);
+            }
 
-        Object.keys(instances).forEach(function(key) {
-            dbConnectionMap.query("SELECT * FROM ws_map_initial WHERE resultID = "+instances[key].resultID, function(err, result) {
-                if (err)
+            if (result[0] === undefined) { // If no map initial records exist, run it
+
+                console.log(critical("MAP INITIAL MISSING FOR ALERT: #"+instances[key].resultID));
+                insertInitialMapData(instances[key], function()
                 {
-                    throw(err);
-                }
-
-                if (result[0] === undefined) { // If no map initial records exist, run it
-
-                    console.log(critical("MAP INITIAL MISSING FOR ALERT: #"+instances[key].resultID));
-                    insertInitialMapData(instances[key], function()
-                    {
-                        console.log(success("Inserted Initial Map data succesfully"));
-                    });
-                }
-            });
+                    console.log(success("Inserted Initial Map data succesfully"));
+                });
+            }
         });
-
-        dbConnectionMap.release();
-
     });
+
     callback();
 }
 
@@ -365,7 +348,7 @@ function onConnect(client) // Set up the websocket
 var eventTypes = ['MetagameEvent', 'Combat', 'FacilityControl', 'VehicleDestroy', 'PopulationChange', 'ExperienceEarned', 'AchievementEarned'];
 
 //Processes Messages received from the client.
-function processMessage(messageData, client, dbConnection)
+function processMessage(messageData, client)
 {
     var message;
 
@@ -385,7 +368,9 @@ function processMessage(messageData, client, dbConnection)
     {
         if (config.toggles.sync === true) {
             if (message.action && message.action === "activeMetagameEvents") {
-                console.log(notice("Sending Actives to processor"));
+                if (config.debug.sync === true) {
+                    console.log(notice("Sending Actives to processor"));
+                }
                 processActives(message);
             }
         }
@@ -433,10 +418,17 @@ function processMessage(messageData, client, dbConnection)
                                         {
                                             if (resultIDArray.length === 0)
                                             {
-                                                console.log(success("================== STARTING ALERT! =================="));
-                                                insertAlert(message, dbConnection, function(resultID)
-                                                {
-                                                    console.log(success("================ INSERTED NEW ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
+                                                pool.getConnection(function(poolErr, dbConnection) {
+                                                    if (poolErr) {
+                                                        throw(poolErr);
+                                                    }
+
+                                                    console.log(success("================== STARTING ALERT! =================="));
+                                                    insertAlert(message, dbConnection, function(resultID)
+                                                    {
+                                                        console.log(success("================ INSERTED NEW ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
+                                                        dbConnection.release();
+                                                    });
                                                 });
                                             }
                                             else
@@ -457,10 +449,16 @@ function processMessage(messageData, client, dbConnection)
 
                                         if (resultID !== undefined)
                                         {
-                                            console.log(success("================== ENDING ALERT! =================="));
-                                            endAlert(message, resultID, dbConnection, function(resultID)
-                                            {
-                                                console.log(success("================ SUCCESSFULLY ENDED ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
+                                            pool.getConnection(function(poolErr, dbConnection) {
+                                                if (poolErr) {
+                                                    throw(poolErr);
+                                                }
+
+                                                console.log(success("================== ENDING ALERT =================="));
+                                                endAlert(message, resultID, dbConnection, function(resultID)
+                                                {
+                                                    console.log(success("================ SUCCESSFULLY ENDED ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
+                                                });
                                             });
                                         }
                                         else
@@ -824,61 +822,68 @@ function findResultID(message, eventType, callback)
     var world = parseInt(message.world_id);
     var zone = parseInt(message.zone_id);
 
-    if (eventType === "MetagameEvent" && world === 19) {
+    if (eventType === "MetagameEvent" && world === 19 && config.toggles.jaeger === false) {
         console.log(critical("Blocked Jaeger MetaGame Event message"));
         return callback(returnedResults);
     }
-    else
+
+    var time = new Date().getTime();
+    time = parseInt(time / 1000); // To convert to seconds
+
+    Object.keys(instances).forEach(function(key)
     {
-        var time = new Date().getTime();
-        time = parseInt(time / 1000); // To convert to seconds
-
-        Object.keys(instances).forEach(function(key)
+        if (instances[key].world === world && instances[key].zone === zone)
         {
-            if (instances[key].world === world && instances[key].zone === zone)
+            var startTime = instances[key].startTime;
+            var endTime = instances[key].endTime;
+
+            if (isNaN(startTime) === true)
             {
-                var startTime = instances[key].startTime;
-                var endTime = instances[key].endTime;
+                console.log(instances[key]);
+                throw('startTime is NaN for instance');
+            }
 
-                if (isNaN(startTime) === true)
-                {
-                    console.log(instances[key]);
-                    throw('startTime is NaN for instance');
-                }
+            if (isNaN(endTime) === true)
+            {
+                console.log(instances[key]);
+                throw('endTime is NaN for instance');
+            }
 
-                if (isNaN(endTime) === true)
-                {
-                    console.log(instances[key]);
-                    throw('endTime is NaN for instance');
-                }
-
-                if (eventType !== "MetagameEvent" && eventType !== "PopulationChange")
-                {
-                    if (startTime < time && endTime > time) // If message is still within time
-                    {
-                        returnedResults.push(instances[key].resultID);
-                    }
-                    else
-                    {
-                        if (config.debug.resultID === true)
-                        {
-                            console.log(warning("MESSAGE RECIEVED OUT OF GAME TIME FOR RESULT #"+instances[key].resultID));
-                        }
-                    }
-                }
-                else
+            if (eventType !== "MetagameEvent" && eventType !== "PopulationChange")
+            {
+                console.log('startTime', startTime);
+                console.log('endTime', endTime);
+                console.log('time', time);
+                if (startTime < time && endTime > time) // If message is still within time
                 {
                     returnedResults.push(instances[key].resultID);
                 }
+                else
+                {
+                    if (config.debug.resultID === true)
+                    {
+                        console.log(warning("MESSAGE RECEIVED OUT OF GAME TIME FOR RESULT #"+instances[key].resultID));
+                    }
+                }
             }
-        });
-    }
+            else
+            {
+                returnedResults.push(instances[key].resultID);
+            }
+        }
+    });
 
     return callback(returnedResults);
 }
 
 function reportError(error, loc, severeError)
 {
+    console.log(critical("++++++++++++++++++++++ ERROR DETECTED!!! ++++++++++++++++++++++"));
+    console.log(notice(new Date().toString()));
+    console.log(error);
+    console.log(critical("LOCATION: "+loc));
+    console.log(critical("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"));
+
     pool.getConnection(function(poolErr, dbConnectionError)
     {
         if (poolErr)
@@ -886,29 +891,23 @@ function reportError(error, loc, severeError)
             throw(poolErr);
         }
 
-        var time = new Date().getTime();
+        var time = new Date().getTime() / 1000;
 
         var errPost =
         {
             errorReturned: error,
             errorLocation: loc,
-            time: time
+            time: parseInt(time)
         };
 
         dbConnectionError.query('INSERT INTO ws_errors SET ?', errPost, function()
         {
-            console.log(critical("++++++++++++++++++++++ ERROR DETECTED!!! ++++++++++++++++++++++"));
-            console.log(notice(new Date().toString()));
-            console.log(error);
-            console.log(critical("LOCATION: "+loc));
-            console.log(critical("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"));
-
             dbConnectionError.release();
-        });
 
-        if (severeError === true) {
-            resetScript();
-        }
+            if (severeError === true) {
+                resetScript();
+            }
+        });
     });
 }
 
@@ -932,14 +931,27 @@ function resetScript() {
 
 function insertAlert(message, dbConnectionA, callback)
 {
+    console.log(notice("NEW ALERT DETECTED!"));
     console.log(notice("ALERT MESSAGE FOLLOWS:"));
     console.log(message);
 
     var world = parseInt(message.world_id);
-    var zone = message.zone_id;
+    var zone = parseInt(message.zone_id);
     var alertType = message.metagame_event_type_id;
 
-    console.log(notice("NEW ALERT DETECTED!"));
+    // Check for the zone it's not present for some reason
+    if (!zone || zone === 0) {
+        APIAlertTypes(alertType, function(data) {
+            console.log(notice('Force calculated zone from metagame type for world: ' + world));
+            console.log(notice('New zone: ' + data.zone));
+            zone = data.zone;
+        });
+    }
+
+    if (!zone) {
+        reportError('Zone could not be determined for the new alert!', 'InsertAlert');
+        return false;
+    }
 
     dbConnectionA.query("SELECT * FROM ws_results WHERE ResultStartTime = "+message.start_time+" AND ResultServer="+world, function(err, result)
     {
@@ -1035,8 +1047,8 @@ function insertAlert(message, dbConnectionA, callback)
                     var monitorPost =
                     {
                         instanceID: message.instance_id,
-                        world: message.world_id,
-                        zone: message.zone_id,
+                        world: world,
+                        zone: zone,
                         resultID: resultID,
                         started: message.start_time,
                         endtime: ends,
@@ -1050,15 +1062,15 @@ function insertAlert(message, dbConnectionA, callback)
 
                     var toSend =
                     {
-                        "startTime": message.start_time,
-                        "endTime": ends,
-                        "world": world,
-                        "zone": zone,
-                        "resultID": resultID,
-                        "controlVS": message.control_vs,
-                        "controlNC": message.control_nc,
-                        "controlTR": message.control_tr,
-                        "metagameEventID": alertType
+                        startTime: message.start_time,
+                        endTime: ends,
+                        world: world,
+                        zone: zone,
+                        resultID: resultID,
+                        controlVS: message.control_vs,
+                        controlNC: message.control_nc,
+                        controlTR: message.control_tr,
+                        metagameEventID: alertType
                     };
 
                     toSend.remaining = (parseInt(toSend.endTime) - parseInt(toSend.startTime));
@@ -1123,7 +1135,7 @@ function insertAlert(message, dbConnectionA, callback)
         }
         else
         {
-            console.log(critical("INVALID START TIME RECIEVED, SKIPPING!"));
+            console.log(critical("INVALID START TIME RECEIVED, SKIPPING!"));
         }
     });
 }
@@ -1206,15 +1218,15 @@ function endAlert(message, resultID, dbConnectionA, callback)
                                                 {
                                                     var toSend =
                                                     {
-                                                        "resultID": resultID,
-                                                        "endTime": message.end_time,
-                                                        "winner": winner,
-                                                        "controlVS": instances[resultID].controlVS,
-                                                        "controlNC": instances[resultID].controlNC,
-                                                        "controlTR": instances[resultID].controlTR,
-                                                        "domination": domination,
-                                                        "world": world,
-                                                        "zone": zone
+                                                        resultID: resultID,
+                                                        endTime: message.end_time,
+                                                        winner: winner,
+                                                        controlVS: instances[resultID].controlVS,
+                                                        controlNC: instances[resultID].controlNC,
+                                                        controlTR: instances[resultID].controlTR,
+                                                        domination: domination,
+                                                        world: world,
+                                                        zone: zone
                                                     };
                                                     console.log(notice("Websocket Message: "));
                                                     console.log(notice(JSON.stringify(toSend, null, 4)));
@@ -1297,15 +1309,15 @@ function updateMapData(message, resultID, dbConnectionMap, callback)
             resultID: resultID,
             timestamp: message.timestamp,
             facilityID: message.facility_id,
-            facilityOwner: message.new_faction_id,
-            facilityOldOwner: message.old_faction_id,
-            controlVS: message.control_vs,
-            controlNC: message.control_nc,
-            controlTR: message.control_tr,
-            durationHeld: message.duration_held,
+            facilityOwner: parseInt(message.new_faction_id),
+            facilityOldOwner: parseInt(message.old_faction_id),
+            controlVS: parseInt(message.control_vs),
+            controlNC: parseInt(message.control_nc),
+            controlTR: parseInt(message.control_tr),
+            durationHeld: parseInt(message.duration_held),
             defence: defence,
-            zone: message.zone_id,
-            world: message.world_id,
+            zone: parseInt(message.zone_id),
+            world: parseInt(message.world_id),
             outfitCaptured: message.outfit_id
         };
 
@@ -3781,6 +3793,7 @@ function APIAlertTypes(eventID, callback)
 {
     var type = null;
     var cont = null;
+    var zone = null;
     var faction = null;
 
     switch (eventID)
@@ -3788,18 +3801,22 @@ function APIAlertTypes(eventID, callback)
         case '1':
             type = "Territory";
             cont = "Indar";
+            zone = 2;
             break;
         case '2':
             type = "Territory";
             cont = "Esamir";
+            zone = 6;
             break;
         case '3':
             type = "Territory";
             cont = "Amerish";
+            zone = 4;
             break;
         case '4':
             type = "Territory";
             cont = "Hossin";
+            zone = 8;
             break;
         case '5':
             type = "ERROR";
@@ -3812,86 +3829,105 @@ function APIAlertTypes(eventID, callback)
         case '7':
             type = "Bio";
             cont = "Amerish";
+            zone = 4;
             break;
         case '8':
             type = "Tech";
             cont = "Amerish";
+            zone = 4;
             break;
         case '9':
             type = "Amp";
             cont = "Amerish";
+            zone = 4;
             break;
         case '10':
             type = "Bio";
             cont = "Indar";
+            zone = 2;
             break;
         case '11':
             type = "Tech";
             cont = "Indar";
+            zone = 2;
             break;
         case '12':
             type = "Amp";
             cont = "Indar";
+            zone = 2;
             break;
         case '13':
             type = "Bio";
             cont = "Esamir";
+            zone = 6;
             break;
         case '14':
             type = "Amp";
             cont = "Esamir";
+            zone = 6;
             break;
         case '15':
             type = "Bio";
             cont = "Hossin";
+            zone = 8;
             break;
         case '16':
             type = "Tech";
             cont= "Hossin";
+            zone = 8;
             break;
         case '17':
             type = "Amp";
             cont = "Hossin";
+            zone = 8;
             break;
         case '31':
             type = "Territory";
             cont = "Indar";
+            zone = 2;
             break;
         case '32':
             type = "Territory";
             cont = "Esamir";
+            zone = 6;
             break;
         case '33':
             type = "Territory";
             cont = "Amerish";
+            zone = 4;
             break;
         case '34':
             type = "Territory";
             cont = "Hossin";
+            zone = 8;
             break;
         case '123':
         case '124':
         case '125':
             type = "CriticalMass";
             cont = "Indar";
+            zone = 2;
             break;
         case '126':
         case '127':
         case '128':
             type = "CriticalMass";
             cont = "Esamir";
+            zone = 6;
             break;
         case '129':
         case '130':
         case '131':
             type = "CriticalMass";
             cont = "Hossin";
+            zone = 8;
             break;
         case '132':
         case '133':
         case '134':
             type = "CriticalMass";
             cont = "Amerish";
+            zone = 4;
             break;
     }
 
@@ -3918,13 +3954,13 @@ function APIAlertTypes(eventID, callback)
 
     var result = null;
 
-    if ((type !== null) && (cont !== null)) // If valid
+    if (type !== null && cont !== null) // If valid
     {
-        result =
-        {
+        result = {
             type: type,
             cont: cont,
-            faction: faction
+            faction: faction,
+            zone: zone
         };
     }
 
@@ -4452,6 +4488,7 @@ function insertInitialMapData(data, callback)
 
             if (success === 1)
             {
+                console.log(json);
                 var mapData = json["map_list"][0]["Regions"]["Row"];
 
                 cachePool.getConnection(function(err, dbMapInsertCache)
@@ -4615,7 +4652,6 @@ function triggerLeaderboardUpdate(world) {
     });
 }
 
-
 function fireSubscriptions(message, resultID, mode, event)
 {
     var world = String(message.world_id);
@@ -4709,25 +4745,20 @@ function fireSubscriptions(message, resultID, mode, event)
 
 function setInstances(message, resultID, mode)
 {
-    var endTime = calcEndTime(message.start_time, message.metagame_event_type_id);
-    var type = message.metagame_event_type_id;
-    var world = message.world_id;
-    var zone = message.zone_id;
-
     if (mode === "subscribe")
     {
         instances[resultID] = {
             status:     true,
             resultID:   resultID,
-            startTime:  message.start_time,
-            endTime:    endTime,
-            type:       type,
-            world:      world,
-            zone:       zone,
-            controlVS:  message.control_vs,
-            controlNC:  message.control_nc,
-            controlTR:  message.control_tr,
-            instanceID: message.instance_id
+            startTime:  parseInt(message.start_time),
+            endTime:    calcEndTime(message.start_time, message.metagame_event_type_id),
+            type:       parseInt(message.metagame_event_type_id),
+            world:      parseInt(message.world_id),
+            zone:       parseInt(message.zone_id),
+            controlVS:  parseInt(message.control_vs),
+            controlNC:  parseInt(message.control_nc),
+            controlTR:  parseInt(message.control_tr),
+            instanceID: parseInt(message.instance_id)
         };
 
         console.log(success("INSTANCE SUCCESSFULLY CREATED!"));
@@ -4754,26 +4785,18 @@ function restoreSubs(dbConnectionI, callback)
         {
             if (resultInstance[i].started < time) // If it requires a subscription now
             {
-                var world      = String(resultInstance[i].world);
-                var zone       = String(resultInstance[i].zone);
-                var started    = String(resultInstance[i].started);
-                var type       = String(resultInstance[i].type);
-                var resultID   = resultInstance[i].resultID;
-                var controlVS  = resultInstance[i].controlVS;
-                var controlNC  = resultInstance[i].controlNC;
-                var controlTR  = resultInstance[i].controlTR;
-                var instanceID = resultInstance[i].instanceID;
+                var resultID   = parseInt(resultInstance[i].resultID);
 
                 var message = {
-                    "world_id":               world,
-                    "zone_id":                zone,
-                    "start_time":             started,
-                    "end_time":               0,
-                    "metagame_event_type_id": type,
-                    "control_vs":             controlVS,
-                    "control_nc":             controlNC,
-                    "control_tr":             controlTR,
-                    "instance_id":            instanceID
+                    world_id:               parseInt(resultInstance[i].world),
+                    zone_id:                parseInt(resultInstance[i].zone),
+                    start_time:             parseInt(resultInstance[i].started),
+                    end_time:               0,
+                    metagame_event_type_id: parseInt(resultInstance[i].type),
+                    control_vs:             parseInt(resultInstance[i].controlVS),
+                    control_nc:             parseInt(resultInstance[i].controlNC),
+                    control_tr:             parseInt(resultInstance[i].controlTR),
+                    instance_id:            parseInt(resultInstance[i].instanceID)
                 };
 
                 // Fake the message to send to the subscriptions function
@@ -5176,33 +5199,34 @@ function checkDuplicateMessages(message, callback)
 
 function calcEndTime(started, type) // Calculates estimated end time of an alert based off type and start time
 {
-    var toAdd;
+    var toAdd = 0;
+
     switch(type)
     {
-        case "1":
-        case "2":
-        case "3":
-        case "4": {
+        case 1:
+        case 2:
+        case 3:
+        case 4: {
             toAdd = 5400;
             break;
         }
-        case '123':
-        case '124':
-        case '125':
-        case '126':
-        case '127':
-        case '128':
-        case '129':
-        case '130':
-        case '131':
-        case '132':
-        case '133':
-        case '134':
+        case 123:
+        case 124:
+        case 125:
+        case 126:
+        case 127:
+        case 128:
+        case 129:
+        case 130:
+        case 131:
+        case 132:
+        case 133:
+        case 134:
             toAdd = 2700;
             break;
     }
 
-    return parseInt(started) + toAdd;
+    return started + toAdd;
 }
 
 // =================== SERVER ===============================
@@ -5661,52 +5685,65 @@ function cleanCache()
     }
 }
 
-var maintTimer = 30 * 1000;
-setInterval(function()
-{
-    if (config.debug.status === true && messagesRecieved > 5)
+var maintInterval;
+
+function setMaintenanceInterval() {
+    var maintTimer = 30 * 1000;
+    maintInterval = setInterval(function()
     {
-        console.log(notice("TOTAL MESSAGES RECIEVED (1 min): "+messagesRecieved));
-    }
-
-    combatHistory();// Log combat history for active alerts
-
-    messagesRecieved = 0;
-    messagesRecievedLast = messagesRecieved;
-
-    checkInstances(function()
-    {
-        if (config.debug.instances === true)
+        if (config.debug.status === true && messagesRecieved > 5)
         {
-            console.log(notice("=========== CURRENT ALERTS IN PROGRESS: ==========="));
+            console.log(notice("TOTAL MESSAGES RECEIVED (1 min): "+messagesRecieved));
+        }
 
-            Object.keys(instances).forEach(function(i) {
-                console.log('===== Result: ' + instances[i].resultID + ' =====');
-                console.log('W: ' + instances[i].world + ' - Z: ' + instances[i].zone);
-                console.log('VS: ' + instances[i].controlVS + ' - NC: ' + instances[i].controlNC + ' - TR: ' + instances[i].controlTR);
-                console.log('Remaining: ' + instances[i].remaining);
+        combatHistory(); // Log combat history for active alerts
+
+        messagesRecieved = 0;
+        messagesRecievedLast = messagesRecieved;
+
+        checkInstances(function()
+        {
+            if (config.debug.instances === true)
+            {
+                if (instances.length > 0) {
+                    console.log(notice("=========== CURRENT ALERTS IN PROGRESS: ==========="));
+
+                    Object.keys(instances).forEach(function(i) {
+                        console.log('===== Result: ' + instances[i].resultID + ' =====');
+                        console.log('W: ' + instances[i].world + ' - Z: ' + instances[i].zone);
+                        console.log('VS: ' + instances[i].controlVS + ' - NC: ' + instances[i].controlNC + ' - TR: ' + instances[i].controlTR);
+                        console.log('Remaining: ' + instances[i].remaining);
+                    });
+                }
+
+            }
+        });
+
+        pool.getConnection(function(poolErr, dbConnectionMap)
+        {
+            checkMapInitial(dbConnectionMap, function()
+            {
+                if (config.debug.mapinitial === true) {
+                    console.log(notice("Map initial checked"));
+                }
+                dbConnectionMap.release();
             });
+        });
+
+        if (config.toggles.sync === true) {
+            if (config.debug.sync === true) {
+                console.log('Performing metagame event sync');
+            }
+
+            var actives = '{"action":"activeMetagameEvents"}'; // Pull a list of all active alerts
+
+            try {
+                client.send(actives);
+            } catch (e) {
+                reportError("Error: " + e, "Metagame Active Alerts message failed", true);
+            }
         }
-    });
-
-    checkMapInitial(function()
-    {
-        console.log(notice("Map inital checked"));
-    });
-
-}, maintTimer);
-
-if (config.toggles.sync === true) {
-    setInterval(function() {
-
-        var actives = '{"action":"activeMetagameEvents"}'; // Pull a list of all active alerts
-
-        try {
-            client.send(actives);
-        } catch (e) {
-            reportError("Error: "+e, "Metagame Active Alerts message failed", true);
-        }
-    }, 30000 );
+    }, maintTimer);
 }
 
 function processActives(message) {
@@ -5729,6 +5766,7 @@ function processActives(message) {
 
             // Check for the instanceID in the instances object
             Object.keys(instances).forEach(function(w) {
+                console.log(instances[w]);
                 if (instances[w].instanceID === instanceID) {
 
                     if (config.debug.sync === true) {
@@ -5749,19 +5787,6 @@ function processActives(message) {
                 if (config.debug.sync === true) {
                     console.log(critical(JSON.stringify(alert, null, 4)));
                 }
-
-                /**
-                 * message = {
-                 *      world_id,
-                 *      zone_id,
-                 *      metagame_event_type_id,
-                 *      start_time,
-                 *      control_vs,
-                 *      control_nc,
-                 *      control_tr,
-                 *      instance_id
-                 * }
-                 */
 
                 alert.world_id = world;
 
