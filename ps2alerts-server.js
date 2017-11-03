@@ -76,10 +76,8 @@ var activesNeeded = false; // A flag set when the activeAlert function requires 
 /**
  * Intervals
  */
-var upcomingCheckInterval;
 var conWatcherInterval;
 var subWatcherInterval;
-var perfInterval;
 
 var wsClient;
 var perfStats = {};
@@ -134,7 +132,7 @@ function checkAPIKey(APIKey, callback)
 
     APIKey = String(APIKey);
 
-    if (APIKey != "undefined")
+    if (APIKey !== "undefined")
     {
         if (config.debug.auth === true)
         {
@@ -143,7 +141,7 @@ function checkAPIKey(APIKey, callback)
 
         Object.keys(apiKeys).forEach(function(i) // Loop through the API keys array to check against supplied key
         {
-            if (apiKeys[i].apikey == APIKey) // If theres a match
+            if (apiKeys[i].apikey === APIKey) // If there's a match
             {
                 isValid = true;
 
@@ -202,21 +200,9 @@ function persistentClient(wss)
         return connected;
     };
 
-    this.getClient = function()
-    {
-        if(client !== undefined)
-        {
-            return client;
-        }
-        else
-        {
-            return undefined;
-        }
-    };
-
     console.log("Connecting Client...");
 
-    client = new WebSocket('ws://push.api.blackfeatherproductions.com/?apikey='+config.extendedAPIKey); // Jhett's API
+    var client = new WebSocket('ws://push.api.blackfeatherproductions.com/?apikey='+config.extendedAPIKey); // Jhett's API
 
     // Websocket Event callbacks
     client.on('open', function()
@@ -229,7 +215,7 @@ function persistentClient(wss)
         {
             if (poolErr) { throw (poolErr); }
 
-            restoreSubs(client, dbConnectionI, function() // Fire subscriptions if they are needed
+            restoreSubs(dbConnectionI, function() // Fire subscriptions if they are needed
             {
                 console.log(success("Subscriptions restored!"));
                 dbConnectionI.release();
@@ -252,7 +238,7 @@ function persistentClient(wss)
                 throw(poolErr);
             }
 
-            processMessage(data, client, wss, dbConnection);
+            processMessage(data, client, dbConnection);
             dbConnection.release();
         });
     });
@@ -277,7 +263,6 @@ function persistentClient(wss)
     Client Functions    *
 ************************/
 
-var maintenance;
 var eventsMonitor;
 var lastWorldDisruption = {};
 var worldStatus = { // Assuming online always at first run
@@ -295,7 +280,6 @@ var worldStatus = { // Assuming online always at first run
     2000: 'online',
     2001: 'online'
 };
-
 
 function checkMapInitial(callback)
 {
@@ -376,15 +360,13 @@ function onConnect(client) // Set up the websocket
     }
 
     /* Fire instances dependant code */
-    var eventsTimer = 10 * 1000;
-
     clearInterval(eventsMonitor);
 }
 
 var eventTypes = ['MetagameEvent', 'Combat', 'FacilityControl', 'VehicleDestroy', 'PopulationChange', 'ExperienceEarned', 'AchievementEarned'];
 
 //Processes Messages received from the client.
-function processMessage(messageData, client, wss, dbConnection)
+function processMessage(messageData, client, dbConnection)
 {
     var message;
 
@@ -403,7 +385,7 @@ function processMessage(messageData, client, wss, dbConnection)
     if (message) // If valid
     {
         if (config.toggles.sync === true) {
-            if (message.action && message.action == "activeMetagameEvents") {
+            if (message.action && message.action === "activeMetagameEvents") {
                 console.log(notice("Sending Actives to processor"));
                 processActives(message);
             }
@@ -416,26 +398,27 @@ function processMessage(messageData, client, wss, dbConnection)
         {
             if (messageValid === true)
             {
-                if (eventCheck != -1) // If a valid event type
+                if (eventCheck !== -1) // If a valid event type
                 {
                     message = message.payload;
 
-                    if (eventType == "MetagameEvent" && config.toggles.metagame === true) // Alert Processing
+                    if (eventType === "MetagameEvent" && config.toggles.metagame === true) // Alert Processing
                     {
                         if (config.debug.metagame === true)
                         {
                             console.log(JSON.stringify(message, null, 4));
                         }
 
-                        var alertType = message.metagame_event_type_id;
-                        var world = message.world_id;
-                        var zone = message.zone_id;
+                        var alertType = parseInt(message.metagame_event_type_id);
+                        var world = parseInt(message.world_id);
+                        var zone = parseInt(message.zone_id);
+                        var alertStatus = parseInt(message.status);
 
                         APIAlertTypes(alertType, function(typeData) // Check if alerts are supported
                         {
                             if (typeData !== null) // If a valid alert type
                             {
-                                if (!message.zone_id)
+                                if (!zone)
                                 {
                                     console.log(critical(JSON.stringify(message, null, 4)));
                                     throw("MISSING ZONE ID FOR WORLD: "+world);
@@ -445,9 +428,9 @@ function processMessage(messageData, client, wss, dbConnection)
 
                                 findResultID(message, eventType, function(resultIDArray) // Get resultID for all functions
                                 {
-                                    if (message.status == "1") // If started
+                                    if (alertStatus === 1) // If started
                                     {
-                                        if (world != "19")
+                                        if (world !== 19)
                                         {
                                             if (resultIDArray.length === 0)
                                             {
@@ -468,7 +451,7 @@ function processMessage(messageData, client, wss, dbConnection)
                                             console.log(critical("Recieved Jaeger Alert Start message. Ignored."));
                                         }
                                     }
-                                    else if (message.status == "0") // If alert end
+                                    else if (alertStatus === 0) // If alert end
                                     {
                                         console.log(notice(resultIDArray));
                                         var resultID = resultIDArray[0];
@@ -476,7 +459,7 @@ function processMessage(messageData, client, wss, dbConnection)
                                         if (resultID !== undefined)
                                         {
                                             console.log(success("================== ENDING ALERT! =================="));
-                                            endAlert(message, resultID, client, dbConnection, function(resultID)
+                                            endAlert(message, resultID, dbConnection, function(resultID)
                                             {
                                                 console.log(success("================ SUCCESSFULLY ENDED ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
                                             });
@@ -486,7 +469,7 @@ function processMessage(messageData, client, wss, dbConnection)
                                             reportError("UNDEFINED RESULTID ALERT END - World: "+world, "End Alert");
                                         }
                                     }
-                                    else if (message.status == "2")
+                                    else if (alertStatus === 2)
                                     {
                                         if (config.debug.metagame === true)
                                         {
@@ -525,7 +508,7 @@ function processMessage(messageData, client, wss, dbConnection)
                                 var resultID = resultIDArray[i];
                                 if (config.toggles.combat === true)
                                 {
-                                    if (eventType == "Combat") // If a combat event
+                                    if (eventType === "Combat") // If a combat event
                                     {
                                         cachePool.getConnection(function(poolErr, dbConnectionCache)
                                         {
@@ -534,24 +517,36 @@ function processMessage(messageData, client, wss, dbConnection)
                                                 throw(poolErr);
                                             }
 
-                                            combatParse(message, resultID, dbConnectionCache);
-                                            dbConnectionCache.release();
+                                            combatParse(message, resultID, dbConnectionCache, function() {
+                                                dbConnectionCache.release();
+                                            })
                                         });
                                     }
                                 }
                                 if (config.toggles.facilitycontrol === true)
                                 {
-                                    if (eventType == "FacilityControl") // If a territory Update
+                                    if (eventType === "FacilityControl") // If a territory Update
                                     {
-                                        updateAlert(message, resultID, function()
+                                        if (resultID)
                                         {
-                                            console.log(success("PROCESSED FACILITY CONTROL"));
-                                        });
+                                            pool.getConnection(function(poolErr, dbConnectionMap)
+                                            {
+                                                if (poolErr)
+                                                {
+                                                    throw(poolErr);
+                                                }
+                                                updateMapData(message, resultID, dbConnectionMap, function()
+                                                {
+                                                    dbConnectionMap.release();
+                                                    console.log(success("PROCESSED FACILITY CONTROL"));
+                                                });
+                                            });
+                                        }
                                     }
                                 }
                                 if (config.toggles.vehicledestroy === true)
                                 {
-                                    if (eventType == "VehicleDestroy")
+                                    if (eventType === "VehicleDestroy")
                                     {
                                         insertVehicleStats(message, resultID, 0, function()
                                         {
@@ -565,14 +560,14 @@ function processMessage(messageData, client, wss, dbConnection)
 
                                 if (config.toggles.populationchange === true)
                                 {
-                                    if (eventType == "PopulationChange")
+                                    if (eventType === "PopulationChange")
                                     {
                                         var VSPop    = message.population_vs;
                                         var NCPop    = message.population_nc;
                                         var TRPop    = message.population_tr;
                                         var TotalPop = message.population_total;
-                                        var world = message.world_id;
-                                        var zone = message.zone_id;
+                                        var world    = parseInt(message.world_id);
+                                        var zone     = parseInt(message.zone_id);
 
                                         if (config.debug.population === true)
                                         {
@@ -619,7 +614,7 @@ function processMessage(messageData, client, wss, dbConnection)
 
                                 if (config.toggles.xpmessage === true)
                                 {
-                                    if (eventType == "ExperienceEarned")
+                                    if (eventType === "ExperienceEarned")
                                     {
                                         pool.getConnection(function(poolErr, dbConnectionXP)
                                         {
@@ -637,17 +632,17 @@ function processMessage(messageData, client, wss, dbConnection)
 
                                 if (config.toggles.achievements === true)
                                 {
-                                    if (eventType == "AchievementEarned")
+                                    if (eventType === "AchievementEarned")
                                     {
-                                        pool.getConnection(function(poolErr, dbConnectionCheevo)
+                                        pool.getConnection(function(poolErr, dbAchievements)
                                         {
                                             if (poolErr)
                                             {
                                                 throw(poolErr);
                                             }
-                                            insertAchievement(message, resultID, dbConnectionCheevo, function()
+                                            insertAchievement(message, resultID, dbAchievements, function()
                                             {
-                                                dbConnectionCheevo.release();
+                                                dbAchievements.release();
                                             });
                                         });
                                     }
@@ -713,7 +708,7 @@ function processMessage(messageData, client, wss, dbConnection)
                         }
                     }
 
-                    if (message.action == "activeAlerts")
+                    if (message.action === "activeAlerts")
                     {
                         known = 1;
                         console.log(notice("ACTIVE ALERTS RECIEVED:"));
@@ -724,10 +719,11 @@ function processMessage(messageData, client, wss, dbConnection)
                         }
                     }
 
-                    if (message.event_type == "ServiceStateChange")
+                    if (message.event_type === "ServiceStateChange")
                     {
                         known = 1;
-                        if (message.payload.online !== undefined)
+                        var payloadOnline = parseInt(message.payload.online);
+                        if (payloadOnline !== undefined)
                         {
                             var time = new Date().getTime();
                             time = parseInt(time / 1000); // To convert to seconds
@@ -738,14 +734,14 @@ function processMessage(messageData, client, wss, dbConnection)
                             }
 
                             var worldID = message.payload.world_id;
-                            if (message.payload.online == "0")
+                            if (payloadOnline === 0)
                             {
                                 worldStatus[worldID] = "offline";
                                 lastWorldDisruption[worldID] = time;
 
                                 console.log(critical("WORLD #"+worldID+" HAS CRASHED!"));
                             }
-                            else if (message.payload.online == "1")
+                            else if (payloadOnline === 1)
                             {
                                 worldStatus[worldID] = "online";
                                 console.log(success("WORLD #"+worldID+" IS ONLINE!"));
@@ -777,7 +773,7 @@ function processMessage(messageData, client, wss, dbConnection)
                                             world: worldID
                                         };
 
-                                        dbConnectionDist.query("INSERT INTO ws_disruption SET ?", insertDisruption, function(err, result)
+                                        dbConnectionDist.query("INSERT INTO ws_disruption SET ?", insertDisruption, function(err)
                                         {
                                             if (err)
                                             {
@@ -826,10 +822,10 @@ function findResultID(message, eventType, callback)
 {
     var returnedResults = [];
 
-    var world = message.world_id;
-    var zone = message.zone_id;
+    var world = parseInt(message.world_id);
+    var zone = parseInt(message.zone_id);
 
-    if (eventType == "MetagameEvent" && world == "19") {
+    if (eventType === "MetagameEvent" && world === 19) {
         console.log(critical("Blocked Jaeger MetaGame Event message"));
         return callback(returnedResults);
     }
@@ -840,8 +836,7 @@ function findResultID(message, eventType, callback)
 
         Object.keys(instances).forEach(function(key)
         {
-            var valid = true;
-            if (instances[key].world == world && instances[key].zone == zone)
+            if (instances[key].world === world && instances[key].zone === zone)
             {
                 var startTime = instances[key].startTime;
                 var endTime = instances[key].endTime;
@@ -921,7 +916,7 @@ function reportError(error, loc, severeError)
 function resetScript() {
     reportError("RESTARTING SCRIPT", "resetScript");
     process.exit(0);
-};
+}
 
 /**
  * message = {
@@ -941,7 +936,7 @@ function insertAlert(message, dbConnectionA, callback)
     console.log(notice("ALERT MESSAGE FOLLOWS:"));
     console.log(message);
 
-    var world = message.world_id;
+    var world = parseInt(message.world_id);
     var zone = message.zone_id;
     var alertType = message.metagame_event_type_id;
 
@@ -963,8 +958,6 @@ function insertAlert(message, dbConnectionA, callback)
 
         if (message.start_time) // If a valid alert message
         {
-            var returned = true;
-
             var now = new Date().getTime();
             var moment = require('moment-timezone');
             var timezone = 'UTC';
@@ -976,15 +969,15 @@ function insertAlert(message, dbConnectionA, callback)
             var AEST = 'Australia/Brisbane';
 
             // Calculate hour offset
-            if (world == 1) { // Connery
+            if (world === 1) { // Connery
                 timezone = PST;
-            } else if (world == 10) { // Miller
+            } else if (world === 10) { // Miller
                 timezone = CEST; // Central European Standard time
-            } else if (world == 13) { // Cobad
+            } else if (world === 13) { // Cobad
                 timezone = CEST; // Central European Standard time
-            } else if (world == 17) { // Emerald
+            } else if (world === 17) { // Emerald
                 timezone = EST; // Eastern Standard time
-            } else if (world == 25) { // Briggs
+            } else if (world === 25) { // Briggs
                 timezone = AEST; // Aussie Eastern Time
             } else if (world >= 2000 ) {
                 timezone = CEST; // Central European Standard time
@@ -1038,7 +1031,7 @@ function insertAlert(message, dbConnectionA, callback)
                 else
                 {
                     var resultID = result.insertId;
-                    var endtime = calcEndTime(message.start_time, message.metagame_event_type_id);
+                    var ends = calcEndTime(message.start_time, message.metagame_event_type_id);
 
                     var monitorPost =
                     {
@@ -1047,7 +1040,7 @@ function insertAlert(message, dbConnectionA, callback)
                         zone: message.zone_id,
                         resultID: resultID,
                         started: message.start_time,
-                        endtime: endtime,
+                        endtime: ends,
                         type: alertType
                     };
 
@@ -1059,7 +1052,7 @@ function insertAlert(message, dbConnectionA, callback)
                     var toSend =
                     {
                         "startTime": message.start_time,
-                        "endTime": endtime,
+                        "endTime": ends,
                         "world": world,
                         "zone": zone,
                         "resultID": resultID,
@@ -1081,7 +1074,6 @@ function insertAlert(message, dbConnectionA, callback)
                         if (err)
                         {
                             reportError(err, "Insert Instances");
-                            var returned = false;
                         }
                         else
                         {
@@ -1113,17 +1105,15 @@ function insertAlert(message, dbConnectionA, callback)
                                 totalHeadshots: 0
                             };
 
-                            dbConnectionA.query('INSERT INTO ws_factions SET ?', factionArray, function(err, result)
+                            dbConnectionA.query('INSERT INTO ws_factions SET ?', factionArray, function(err)
                             {
                                 if (err)
                                 {
                                     reportError(err, "Insert Factions Record");
-                                    var returned = false;
                                 }
                                 else
                                 {
                                     fireSubscriptions(message, resultID, "subscribe");
-
                                     callback(resultID);
                                 }
                             });
@@ -1139,7 +1129,7 @@ function insertAlert(message, dbConnectionA, callback)
     });
 }
 
-function endAlert(message, resultID, client, dbConnectionA, callback)
+function endAlert(message, resultID, dbConnectionA, callback)
 {
     console.log(message);
     var world = message.world_id;
@@ -1147,7 +1137,6 @@ function endAlert(message, resultID, client, dbConnectionA, callback)
 
     console.log('================ ENDING ALERT #'+resultID+' - World: '+world+' - Zone: '+zone+' ================');
 
-    var returned = true;
     if (resultID)
     {
         var date = new Date();
@@ -1179,7 +1168,7 @@ function endAlert(message, resultID, client, dbConnectionA, callback)
 
                     if ((Fresult[0]) && (Lresult[0])) // If results have been pulled
                     {
-                        calcWinners(message, resultID, Lresult, Fresult, dbConnectionA, function(winner, draw, domination)
+                        calcWinners(message, resultID, Lresult, dbConnectionA, function(winner, draw, domination)
                         {
                             if (winner) // If the winner was actually calculated
                             {
@@ -1285,26 +1274,7 @@ function endAlert(message, resultID, client, dbConnectionA, callback)
     }
 }
 
-function updateAlert(message, resultID, callback)
-{
-    var returned = true;
-    if (resultID)
-    {
-        pool.getConnection(function(poolErr, dbConnectionMap)
-        {
-            if (poolErr)
-            {
-                throw(poolErr);
-            }
-            updateMapData(message, resultID, 0, dbConnectionMap, function()
-            {
-                dbConnectionMap.release();
-            });
-        });
-    }
-}
-
-function updateMapData(message, resultID, insert, dbConnectionMap, callback)
+function updateMapData(message, resultID, dbConnectionMap, callback)
 {
     if (message.facility_id && message.is_block_update === "0") // If Valid
     {
@@ -1358,9 +1328,6 @@ function updateMapData(message, resultID, insert, dbConnectionMap, callback)
             }
             else
             {
-                var world = message.world_id;
-                var zone = message.zone_id;
-
                 if (instances[resultID] !== undefined)
                 {
                     instances[resultID].controlVS = message.control_vs;
@@ -1376,7 +1343,7 @@ function updateMapData(message, resultID, insert, dbConnectionMap, callback)
                             controlTR: message.control_tr
                         };
 
-                        dbConnectionMap.query("UPDATE ws_instances SET ? WHERE resultID = "+resultID, instancesPost, function(err, result)
+                        dbConnectionMap.query("UPDATE ws_instances SET ? WHERE resultID = "+resultID, instancesPost, function(err)
                         {
                             if (err)
                             {
@@ -1386,7 +1353,7 @@ function updateMapData(message, resultID, insert, dbConnectionMap, callback)
 
                         if (message.outfit_id > 0) {
 
-                            dbConnectionMap.query("UPDATE ws_outfits_total SET outfitCaptures=outfitCaptures+1 WHERE outfitID = '"+message.outfit_id+"'", function(err, result)
+                            dbConnectionMap.query("UPDATE ws_outfits_total SET outfitCaptures=outfitCaptures+1 WHERE outfitID = '"+message.outfit_id+"'", function(err)
                             {
                                 if (err)
                                 {
@@ -1411,7 +1378,7 @@ function updateMapData(message, resultID, insert, dbConnectionMap, callback)
     }
 }
 
-function combatParse(message, resultID, dbConnectionCache)
+function combatParse(message, resultID, dbConnectionCache, callback)
 {
     var killerID        = message.attacker_character_id;
     var victimID        = message.victim_character_id;
@@ -1419,20 +1386,21 @@ function combatParse(message, resultID, dbConnectionCache)
     var victimOutfit    = message.victim_outfit_id;
     var killerName      = message.attacker_character_name;
     var victimName      = message.victim_character_name;
-    var attackerFaction = message.attacker_faction_id;
-    var victimFaction   = message.victim_faction_id;
+    var attackerFaction = parseInt(message.attacker_faction_id);
+    var victimFaction   = parseInt(message.victim_faction_id);
+    var worldID         = parseInt(message.world_id);
     var suicide = 0;
     var teamKill = 0;
 
     messagesRecieved++;
     messagesRecievedSec++;
 
-    if (message.attacker_faction_id == message.victim_faction_id) // If a TK
+    if (attackerFaction === victimFaction) // If a TK
     {
         teamKill = 1;
     }
 
-    if (killerID == victimID)
+    if (killerID === victimID)
     {
         suicide = 1;
         teamKill = 0;
@@ -1474,37 +1442,37 @@ function combatParse(message, resultID, dbConnectionCache)
                 console.log(notice("Missing player names for combat event. Cancelling operations."));
             }
 
-            if (killerOutfit == "0")
+            if (killerOutfit === "0")
             {
-                if (attackerFaction == "1")
+                if (attackerFaction === 1)
                 {
                     killerOutfit = "-1";
                 }
 
-                if (attackerFaction == "2")
+                if (attackerFaction === 2)
                 {
                     killerOutfit = "-2";
                 }
 
-                if (attackerFaction == "3")
+                if (attackerFaction === 3)
                 {
                     killerOutfit = "-3";
                 }
             }
 
-            if (victimOutfit == "0")
+            if (victimOutfit === "0")
             {
-                if (victimFaction == "1")
+                if (victimFaction === 1)
                 {
                     victimOutfit = "-1";
                 }
 
-                if (victimFaction == "2")
+                if (victimFaction === 2)
                 {
                     victimOutfit = "-2";
                 }
 
-                if (victimFaction == "3")
+                if (victimFaction === 3)
                 {
                     victimOutfit = "-3";
                 }
@@ -1513,26 +1481,26 @@ function combatParse(message, resultID, dbConnectionCache)
             var combatArray =
             {
                 timestamp: message.timestamp,
-                resultID: resultID,
+                resultID: parseInt(resultID),
                 attackerID: killerID,
                 attackerName: killerName,
                 attackerOutfit: killerOutfit,
-                attackerFaction: message.attacker_faction_id,
-                attackerLoadout: message.attacker_loadout_id,
-                attackerBR: killerBR,
+                attackerFaction: parseInt(message.attacker_faction_id),
+                attackerLoadout: parseInt(message.attacker_loadout_id),
+                attackerBR: parseInt(killerBR),
                 victimID: victimID,
                 victimName: victimName,
                 victimOutfit: victimOutfit,
-                victimFaction: message.victim_faction_id,
-                victimLoadout: message.victim_loadout_id,
-                victimBR: victimBR,
-                weaponID: message.weapon_id,
-                vehicleID: message.vehicle_id,
-                headshot: message.is_headshot,
-                zone: message.zone_id,
-                worldID: message.world_id,
+                victimFaction: parseInt(message.victim_faction_id),
+                victimLoadout: parseInt(message.victim_loadout_id),
+                victimBR: parseInt(victimBR),
+                weaponID: parseInt(message.weapon_id),
+                vehicleID: parseInt(message.vehicle_id),
+                headshot: parseInt(message.is_headshot),
+                zone: parseInt(message.zone_id),
+                worldID: parseInt(message.world_id),
                 teamkill: teamKill,
-                suicide: suicide,
+                suicide: suicide
             };
 
             if (config.debug.combat === true)
@@ -1543,11 +1511,11 @@ function combatParse(message, resultID, dbConnectionCache)
                 console.log(warning(JSON.stringify(combatArray, null, 4)));
             }
 
-            checkOutfitCache(message.attacker_outfit_id, message.world_id, dbConnectionCache, function(aoutfitName, aoutfitTag, aoutfitFaction, aoutfitID)
+            checkOutfitCache(killerOutfit, worldID, dbConnectionCache, function(aoutfitName, aoutfitTag, aoutfitFaction, aoutfitID)
             {
                 combatArray.aOutfit = {};
 
-                if (aoutfitName != undefined) // If returned
+                if (aoutfitName !== undefined) // If returned
                 {
                     combatArray.aOutfit = {};
                     combatArray.aOutfit.id = aoutfitID;
@@ -1569,9 +1537,9 @@ function combatParse(message, resultID, dbConnectionCache)
                     console.log("Attacker Outfit Object Built");
                 }
 
-                checkOutfitCache(message.victim_outfit_id, message.world_id, dbConnectionCache, function(voutfitName, voutfitTag, voutfitFaction, voutfitID)
+                checkOutfitCache(victimOutfit, worldID, dbConnectionCache, function(voutfitName, voutfitTag, voutfitFaction, voutfitID)
                 {
-                    if (voutfitName != undefined) // If returned
+                    if (voutfitName !== undefined) // If returned
                     {
                         combatArray.vOutfit = {};
                         combatArray.vOutfit.id = voutfitID;
@@ -1588,31 +1556,18 @@ function combatParse(message, resultID, dbConnectionCache)
                         combatArray.vOutfit.faction = "0";
                     }
 
-                    pool.getConnection(function(poolErr, dbConnectionC)
+                    // console.log(JSON.stringify(combatArray, null, 4));
+                    sendResult("combat", combatArray, resultID);
+                    sendWorld('Combat', JSON.stringify(combatArray), combatArray.worldID);
+
+                    insertCombatRecord(message, resultID, combatArray, function()
                     {
-                        if (poolErr)
+                        if(config.debug.combat === true)
                         {
-                            throw(poolErr);
+                            console.log("INSERTED COMBAT RECORD");
                         }
 
-                        if (config.debug.combat === true)
-                        {
-                            console.log("Victim Outfit Object Built");
-                        }
-                        
-                        // console.log(JSON.stringify(combatArray, null, 4));
-                        sendResult("combat", combatArray, resultID);
-                        sendWorld('Combat', JSON.stringify(combatArray), combatArray.worldID);
-
-                        insertCombatRecord(message, resultID, combatArray, dbConnectionC, function()
-                        {
-                            if(config.debug.combat === true)
-                            {
-                                console.log("INSERTED COMBAT RECORD");
-                            }
-
-                            dbConnectionC.release();
-                        });
+                        callback();
                     });
                 });
             });
@@ -1622,41 +1577,10 @@ function combatParse(message, resultID, dbConnectionCache)
     addKillMonitor(killerID, victimID, "kill", message.timestamp, message.vehicle_id, 0, resultID, killerName, victimName);
 }
 
-function insertCombatRecord(message, resultID, combatArray, dbConnectionC, callback)
+function insertCombatRecord(message, resultID, combatArray, callback)
 {
     if(resultID) // Make sure result ID is valid first
     {
-        var postArray =
-        {
-            timestamp: message.timestamp,
-            resultID: resultID,
-            attackerID: combatArray.attackerID,
-            attackerName: combatArray.attackerName,
-            attackerOutfit: combatArray.attackerOutfit,
-            attackerFaction: combatArray.attackerFaction,
-            attackerLoadout: combatArray.attackerLoadout,
-            attackerBR: combatArray.attackerBR,
-            victimID: combatArray.victimID,
-            victimName: combatArray.victimName,
-            victimOutfit: combatArray.victimOutfit,
-            victimFaction: combatArray.victimFaction,
-            victimLoadout: combatArray.victimLoadout,
-            victimBR: combatArray.victimBR,
-            weaponID: combatArray.weaponID,
-            vehicleID: combatArray.vehicleID,
-            headshot: combatArray.headshot,
-            zone: combatArray.zone,
-            worldID: combatArray.worldID,
-            teamkill: combatArray.teamkill,
-            suicide: combatArray.suicide,
-        };
-
-        if (config.debug.combat === true)
-        {
-            console.log("Post array built");
-            console.log(warning(JSON.stringify(postArray, null, 4)));
-        }
-
         pool.getConnection(function(poolErr, dbConnectionW)
         {
             if (poolErr)
@@ -1668,16 +1592,7 @@ function insertCombatRecord(message, resultID, combatArray, dbConnectionC, callb
             dbConnectionW.release();
         });
 
-        pool.getConnection(function(poolErr, dbConnectionO)
-        {
-            if (poolErr)
-            {
-                throw(poolErr);
-            }
-
-            insertOutfitStats(message, resultID, combatArray, dbConnectionO);
-            dbConnectionO.release();
-        });
+        insertOutfitStats(resultID, combatArray);
 
         pool.getConnection(function(poolErr, dbConnectionP)
         {
@@ -1686,35 +1601,16 @@ function insertCombatRecord(message, resultID, combatArray, dbConnectionC, callb
                 throw(poolErr);
             }
 
-            insertPlayerStats(message, resultID, combatArray, dbConnectionP);
-            dbConnectionP.release();
+            insertPlayerStats(resultID, combatArray, dbConnectionP, function() {
+                dbConnectionP.release();
+            });
         });
 
-        pool.getConnection(function(poolErr, dbConnectionF)
-        {
-            if (poolErr)
-            {
-                throw(poolErr);
-            }
-
-            updateFactionStats(message, resultID, combatArray, dbConnectionF);
-            dbConnectionF.release();
-        });
+        updateFactionStats(resultID, combatArray);
 
         if (config.toggles.classStats === true)
         {
-            pool.getConnection(function(poolErr, dbConnectionClass)
-            {
-                if (poolErr)
-                {
-                    throw(poolErr);
-                }
-
-                insertClassStats(message, resultID, combatArray, dbConnectionClass, function()
-                {
-                    dbConnectionClass.release();
-                });
-            });
+            insertClassStats(resultID, combatArray);
         }
 
         if (config.debug.combat === true)
@@ -1737,13 +1633,13 @@ function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
     var headshot = '';
     var teamkill = '';
 
-    if (combatArray.teamkill == "1")
+    if (combatArray.teamkill === "1")
     {
         kill = '';
         teamkill = 'teamkills=teamkills+1';
     }
 
-    if (combatArray.headshot == "1")
+    if (combatArray.headshot === "1")
     {
         headshot = ', headshots=headshots+1';
     }
@@ -1767,7 +1663,7 @@ function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
 
             var killInt = 1;
 
-            if (combatArray.teamkill == 1) {
+            if (combatArray.teamkill === 1) {
                 killInt = 0;
             }
 
@@ -1826,12 +1722,12 @@ function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
                             teamkills: combatArray.teamkill
                         };
 
-                        if (config.debug.wepaons === true)
+                        if (config.debug.weapons === true)
                         {
                             console.log(weaponArray);
                         }
 
-                        dbConnectionW.query('INSERT INTO ws_weapons SET ?', weaponArray, function(err, result)
+                        dbConnectionW.query('INSERT INTO ws_weapons SET ?', weaponArray, function(err)
                         {
                             if (err)
                             {
@@ -1863,16 +1759,10 @@ function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
     });
 }
 
-function insertOutfitStats(message, resultID, combatArray, dbConnectionO)
+function insertOutfitStats(resultID, combatArray)
 {
     var killOutfit = combatArray.attackerOutfit;
     var deathOutfit = combatArray.victimOutfit;
-    var numRowsKills = 0;
-    var numRowsDeaths = 0;
-    var attackerID = combatArray.attackerID;
-    var victimID = combatArray.victimID;
-    var attackerFaction = combatArray.attackerFaction;
-    var victimFaction = combatArray.victimFaction;
     var worldID = combatArray.worldID;
 
     if (outfitTotalsUpdates[resultID] === undefined)
@@ -1891,7 +1781,7 @@ function insertOutfitStats(message, resultID, combatArray, dbConnectionO)
             world: worldID,
             outfitName: combatArray.aOutfit.name,
             outfitTag: combatArray.aOutfit.tag,
-            outfitFaction: combatArray.attackerFaction,
+            outfitFaction: combatArray.attackerFaction
         };
     }
     if (outfitTotalsUpdates[resultID][deathOutfit] === undefined)
@@ -1905,16 +1795,16 @@ function insertOutfitStats(message, resultID, combatArray, dbConnectionO)
             world: worldID,
             outfitName: combatArray.vOutfit.name,
             outfitTag: combatArray.vOutfit.tag,
-            outfitFaction: combatArray.victimFaction,
+            outfitFaction: combatArray.victimFaction
         };
     }
 
-    if (combatArray.teamkill == 1) // TK
+    if (combatArray.teamkill === 1) // TK
     {
         outfitTotalsUpdates[resultID][killOutfit].outfitTKs++;
         outfitTotalsUpdates[resultID][deathOutfit].outfitDeaths++;
     }
-    else if (combatArray.suicide == 1) // If a suicide
+    else if (combatArray.suicide === 1) // If a suicide
     {
         outfitTotalsUpdates[resultID][deathOutfit].outfitDeaths++;
         outfitTotalsUpdates[resultID][deathOutfit].outfitSuicides++;
@@ -1926,7 +1816,7 @@ function insertOutfitStats(message, resultID, combatArray, dbConnectionO)
     }
 }
 
-function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
+function insertPlayerStats(resultID, combatArray, dbConnectionP, callback)
 {
     var attackerID = combatArray.attackerID;
     var victimID = combatArray.victimID;
@@ -1938,15 +1828,12 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
     var victimName = combatArray.victimName;
     var attackerBR = combatArray.attackerBR;
     var victimBR = combatArray.victimBR;
-    var timestamp = combatArray.timestamp;
     var headshot = combatArray.headshot;
     var worldID = combatArray.worldID;
 
     /* If the names are missing, resolve them manually */
 
     var teamKill = 0;
-    var numRowsKills = 0;
-    var numRowsDeaths = 0;
     var suicide = 0;
 
     var aKillQuery = 'playerKills=playerKills+1';
@@ -1957,13 +1844,13 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
 
     var vDeathQuery = 'playerDeaths=playerDeaths+1';
 
-    if (combatArray.headshot == "1")
+    if (combatArray.headshot === 1)
     {
         aKillQuery = 'playerKills=playerKills+1, ';
         headshotQuery = 'headshots=headshots+1';
     }
 
-    if (combatArray.teamkill == "1") // If a TK
+    if (combatArray.teamkill === 1) // If a TK
     {
         aKillQuery = '';
         teamKill = 1;
@@ -1974,12 +1861,12 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
             console.log("TEAM KILL - Player");
         }
 
-        if (combatArray.headshot == "1")
+        if (combatArray.headshot === 1)
         {
             headshotQuery = 'headshots=headshots+1, ';
         }
     }
-    else if (combatArray.suicide == "1") // Is it a suicie?
+    else if (combatArray.suicide === 1) // Is it a suicie?
     {
         aKillQuery = '';
         aDeathQuery = 'playerDeaths=playerDeaths+1, ';
@@ -1996,12 +1883,12 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
     var playerKills = 1;
     var playerDeaths = 0;
 
-    if (teamKill == "1")
+    if (teamKill === 1)
     {
         playerKills = 0;
     }
 
-    if (suicide == "1")
+    if (suicide === 1)
     {
         playerDeaths = 1;
         playerKills = 0;
@@ -2037,10 +1924,10 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                     playerTeamKills: teamKill,
                     playerSuicides: suicide,
                     playerBR: attackerBR,
-                    headshots: headshot,
+                    headshots: headshot
                 };
                 
-                dbConnectionP.query('INSERT INTO ws_players SET ?', playerArrayKills, function(err, result)
+                dbConnectionP.query('INSERT INTO ws_players SET ?', playerArrayKills, function(err)
                 {
                     if (err)
                     {
@@ -2088,7 +1975,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                         playerServer: worldID
                     };
 
-                    dbConnectionP.query('INSERT INTO ws_players_total SET ?', playerArrayTotal, function(err, result)
+                    dbConnectionP.query('INSERT INTO ws_players_total SET ?', playerArrayTotal, function(err)
                     {
                         if(err)
                         {
@@ -2106,7 +1993,7 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                 }
             });
 
-            if (attackerID != victimID) // Don't count them twice!
+            if (attackerID !== victimID) // Don't count them twice!
             {
                 var victimUpdateQuery = 'UPDATE ws_players SET playerBR = '+victimBR+', '+vDeathQuery+' WHERE playerID="'+victimID+'" AND resultID='+resultID;
 
@@ -2139,10 +2026,10 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                                 playerTeamKills: 0,
                                 playerSuicides: 0,
                                 playerBR: victimBR,
-                                headshots: 0,
+                                headshots: 0
                             };
 
-                            dbConnectionP.query('INSERT INTO ws_players SET ?', playerArrayDeaths, function(err, result)
+                            dbConnectionP.query('INSERT INTO ws_players SET ?', playerArrayDeaths, function(err)
                             {
                                 if (err)
                                 {
@@ -2187,10 +2074,10 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
                             playerTeamKills: 0,
                             playerSuicides: 0,
                             playerBR: victimBR,
-                            headshots: 0,
+                            headshots: 0
                         };
 
-                        dbConnectionP.query('INSERT INTO ws_players_total SET ?', playerArrayTotal, function(err, result)
+                        dbConnectionP.query('INSERT INTO ws_players_total SET ?', playerArrayTotal, function(err)
                         {
                             if(err)
                             {
@@ -2217,6 +2104,8 @@ function insertPlayerStats(message, resultID, combatArray, dbConnectionP)
             }
         }
     });
+
+    callback();
 }
 
 var factionUpdates = {};
@@ -2325,7 +2214,7 @@ function batchUpdateXpTotals(callback)
                         occurances: 1
                     };
 
-                    dbXPUpdate.query('INSERT INTO ws_xp_totals SET ?', xpArrayTotals, function(err, result)
+                    dbXPUpdate.query('INSERT INTO ws_xp_totals SET ?', xpArrayTotals, function(err)
                     {
                         if (err)
                         {
@@ -2390,7 +2279,7 @@ function batchUpdateOutfitTotals(callback)
                             outfitTKs: object.outfitTKs
                         };
 
-                        dbOutfitUpdate.query('INSERT INTO ws_outfits SET ?', outfitArrayKills, function(err, result)
+                        dbOutfitUpdate.query('INSERT INTO ws_outfits SET ?', outfitArrayKills, function(err)
                         {
                             if (err)
                             {
@@ -2427,10 +2316,10 @@ function batchUpdateOutfitTotals(callback)
                                 outfitDeaths: object.outfitDeaths,
                                 outfitSuicides: object.outfitSuicides,
                                 outfitTKs: object.outfitTKs,
-                                outfitServer: object.world,
+                                outfitServer: object.world
                             };
 
-                            dbOutfitUpdate.query('INSERT INTO ws_outfits_total SET ?', outfitArrayKills, function(err, result)
+                            dbOutfitUpdate.query('INSERT INTO ws_outfits_total SET ?', outfitArrayKills, function(err)
                             {
                                 if(err)
                                 {
@@ -2503,7 +2392,7 @@ function batchUpdateClassTotals(callback)
                             suicides: object.suicides
                         };
 
-                        dbClassUpdate.query('INSERT INTO ws_classes SET ?', classArray, function(err, result)
+                        dbClassUpdate.query('INSERT INTO ws_classes SET ?', classArray, function(err)
                         {
                             if (err)
                             {
@@ -2564,7 +2453,7 @@ function batchUpdateClassTotals(callback)
                                 suicides  : object.suicides
                             };
 
-                            dbClassUpdate.query('INSERT INTO ws_classes_totals SET ?', classArray, function(err, result)
+                            dbClassUpdate.query('INSERT INTO ws_classes_totals SET ?', classArray, function(err)
                             {
                                 if (err)
                                 {
@@ -2590,14 +2479,10 @@ function batchUpdateClassTotals(callback)
     callback();
 }
 
-function updateFactionStats(message, resultID, combatArray, dbConnectionF)
+function updateFactionStats(resultID, combatArray)
 {
-    var killerID = combatArray.attackerID;
-    var victimID = combatArray.victimID;
-    var killerFID = combatArray.attackerFaction;
-    var victimFID = combatArray.victimFaction;
-    var killerName = combatArray.attackerName;
-    var victimName = combatArray.victimName;
+    var killerFID = parseInt(combatArray.attackerFaction);
+    var victimFID = parseInt(combatArray.victimFaction);
 
     if (factionUpdates[resultID] === undefined)
     {
@@ -2628,33 +2513,33 @@ function updateFactionStats(message, resultID, combatArray, dbConnectionF)
 
     /* If the names are missing, resolve them manually */
 
-    if (killerFID == "1")
+    if (killerFID === 1)
     {
         kFaction = "VS";
     }
-    else if (killerFID == "2")
+    else if (killerFID === 2)
     {
         kFaction = "NC";
     }
-    else if (killerFID == "3")
+    else if (killerFID === 3)
     {
         kFaction = "TR";
     }
 
-    if (victimFID == "1")
+    if (victimFID === 1)
     {
         vFaction = "VS";
     }
-    else if (victimFID == "2")
+    else if (victimFID === 2)
     {
         vFaction = "NC";
     }
-    else if (victimFID == "3")
+    else if (victimFID === 3)
     {
         vFaction = "TR";
     }
 
-    if (combatArray.teamkill == "1") // If a TK
+    if (combatArray.teamkill === 1) // If a TK
     {
         factionUpdates[resultID]['teamKills'+kFaction]++;
         factionUpdates[resultID]['deaths'+kFaction]++;
@@ -2666,9 +2551,9 @@ function updateFactionStats(message, resultID, combatArray, dbConnectionF)
             console.log(critical("TK"));
         }
     }
-    else if (combatArray.suicide == "1") // Is it a suicide?
+    else if (combatArray.suicide === 1) // Is it a suicide?
     {
-        if (killerFID == "0") // If the faction is missing, use the victim
+        if (killerFID === 0) // If the faction is missing, use the victim
         {
             kFaction = vFaction;
         }
@@ -2695,7 +2580,7 @@ function updateFactionStats(message, resultID, combatArray, dbConnectionF)
             console.log(success("KILL"));
         }
         
-        if (combatArray.headshot == '1') {
+        if (combatArray.headshot === 1) {
             factionUpdates[resultID]['headshots'+kFaction]++;
             factionUpdates[resultID]['totalHeadshots']++;
         }
@@ -2769,6 +2654,8 @@ function insertVehicleStats(message, resultID, combat, callback)
 
         addKillMonitor(killerID, victimID, "vKill", message.timestamp, killerVID, victimVID, resultID, null, null);
     }
+
+    callback();
 }
 
 function insertExperience(message, resultID, dbConnectionXP, callback)
@@ -2776,7 +2663,6 @@ function insertExperience(message, resultID, dbConnectionXP, callback)
     var charID = message.character_id;
     var xpType = message.experience_id;
     var xpTypeInt = parseInt(message.experience_id);
-    var xpAmount = message.amount;
 
     /*- XP -
     2 - Assist
@@ -2843,7 +2729,7 @@ function insertExperience(message, resultID, dbConnectionXP, callback)
 
     var typeCheck = allowedXPTypes.indexOf(xpTypeInt);
 
-    if (typeCheck != "-1")
+    if (typeCheck !== -1)
     {
         if (xpTotalsUpdates[xpType] === undefined)
         {
@@ -2858,7 +2744,7 @@ function insertExperience(message, resultID, dbConnectionXP, callback)
         {
             if (err)
             {
-                if (err.errno == 1213 || err.errno == 1062) // If deadlock
+                if (err.errno === 1213 || err.errno === 1062) // If deadlock
                 {
                     console.log(err.errno);
                     handleDeadlock(updateQuery, "XP Update", 0);
@@ -2884,7 +2770,7 @@ function insertExperience(message, resultID, dbConnectionXP, callback)
                     occurances: 1
                 };
 
-                dbConnectionXP.query('INSERT INTO ws_xp SET ?', xpArray, function(err, result)
+                dbConnectionXP.query('INSERT INTO ws_xp SET ?', xpArray, function(err)
                 {
                     if (err)
                     {
@@ -2909,7 +2795,7 @@ function insertExperience(message, resultID, dbConnectionXP, callback)
     callback();
 }
 
-function insertClassStats(message, resultID, combatArray, dbConnectionClass, callback)
+function insertClassStats(resultID, combatArray)
 {
     var attackerLoadout = combatArray.attackerLoadout;
     var victimLoadout   = combatArray.victimLoadout;
@@ -2984,7 +2870,7 @@ function insertClassStats(message, resultID, combatArray, dbConnectionClass, cal
 
     /**  **/
 
-    if (combatArray.teamkill == 1)
+    if (combatArray.teamkill === 1)
     {
         classTotalsUpdates[resultID][attackerLoadout].teamkills++;
         classTotalsUpdates[resultID][victimLoadout].deaths++;
@@ -2992,7 +2878,7 @@ function insertClassStats(message, resultID, combatArray, dbConnectionClass, cal
         classPlayerUpdates[resultID][attackerLoadout][attackerID].teamkills++;
         classPlayerUpdates[resultID][victimLoadout][victimID].deaths++;
     }
-    else if (combatArray.suicide == 1)
+    else if (combatArray.suicide === 1)
     {
         classTotalsUpdates[resultID][victimLoadout].deaths++;
         classTotalsUpdates[resultID][victimLoadout].suicides++;
@@ -3008,8 +2894,6 @@ function insertClassStats(message, resultID, combatArray, dbConnectionClass, cal
         classPlayerUpdates[resultID][attackerLoadout][attackerID].kills++;
         classPlayerUpdates[resultID][victimLoadout][victimID].deaths++;
     }
-
-    callback();
 }
 
 function insertAchievement(message, resultID, dbConnectionCheevo, callback)
@@ -3019,7 +2903,7 @@ function insertAchievement(message, resultID, dbConnectionCheevo, callback)
 
     var updateCheevoQuery = 'UPDATE ws_achievements SET occurances=occurances+1 WHERE playerID ='+charID+' AND achievementID = '+cheevoID+' AND resultID ='+resultID;
 
-    dbConnectionCheevo.query(updateCheevoQuery, function(err, resultCheevo)
+    dbConnectionCheevo.query(updateCheevoQuery, function(err, resultAchievement)
     {
         if (err)
         {
@@ -3033,14 +2917,14 @@ function insertAchievement(message, resultID, dbConnectionCheevo, callback)
             }
         }
 
-        if (resultCheevo !== undefined && resultCheevo.affectedRows === 0) // If missing record
+        if (resultAchievement !== undefined && resultAchievement.affectedRows === 0) // If missing record
         {
-            if (config.debug.achievements == 1)
+            if (config.debug.achievements === true)
             {
                 console.log(notice("INSERTING ACHIVEMENT RECORD"));
             }
 
-            var cheevoArray =
+            var achievementArray =
             {
                 playerID : charID,
                 resultID: resultID,
@@ -3048,7 +2932,7 @@ function insertAchievement(message, resultID, dbConnectionCheevo, callback)
                 occurances: 1
             };
 
-            dbConnectionCheevo.query('INSERT INTO ws_achievements SET ?', cheevoArray, function(err, result)
+            dbConnectionCheevo.query('INSERT INTO ws_achievements SET ?', achievementArray, function(err)
             {
                 if (err)
                 {
@@ -3058,7 +2942,7 @@ function insertAchievement(message, resultID, dbConnectionCheevo, callback)
                     }
                     else
                     {
-                        handleDeadlock(updateCheevoQuery, "Insert Achivement", 0);
+                        handleDeadlock(updateCheevoQuery, "Insert Achievement", 0);
                     }
                 }
             });
@@ -3084,25 +2968,24 @@ function insertPopulationStats(resultID, dbConnectionPopulation, callback)
         populationPulls[resultID] = true;
 
         var time = new Date().getTime();
-        var mysqltime = Math.round(time / 1000);
 
         if (populationInstance !== undefined)
         {
             var popArray =
             {
                 resultID  : resultID,
-                timestamp : mysqltime,
+                timestamp : Math.round(time / 1000),
                 worldID   : parseInt(populationInstance.world),
                 zoneID    : parseInt(populationInstance.zone),
                 popsVS    : parseInt(populationInstance.VS),
                 popsNC    : parseInt(populationInstance.NC),
                 popsTR    : parseInt(populationInstance.TR),
-                popsTotal : parseInt(populationInstance.total),
+                popsTotal : parseInt(populationInstance.total)
             };
 
             sendResult("pops", popArray, resultID);
 
-            dbConnectionPopulation.query('INSERT INTO ws_pops SET ?', popArray, function(err, result)
+            dbConnectionPopulation.query('INSERT INTO ws_pops SET ?', popArray, function(err)
             {
                 if (err)
                 {
@@ -3176,7 +3059,7 @@ function sendResult(messageType, message, resultID) // Sends message to WS Clien
                 });
             }
 
-        if (config.debug.keepalive === true && messageType != "keepalive")
+        if (config.debug.keepalive === true && messageType !== "keepalive")
         {
             console.log(notice("Message Sent to Result Websockets"));
         }
@@ -3198,7 +3081,7 @@ function sendMonitor(messageType, message) // Sends message to WS Clients
             console.log(messageToSend);
         }
 
-        if ((messageType == "alertStart") || (messageType == "alertEnd") || (messageType == "update")) // Send to monitor
+        if (messageType === "alertStart" || messageType === "alertEnd" || messageType === "update") // Send to monitor
         {
             Object.keys(clientConnections).forEach(function(key)
             {
@@ -3216,7 +3099,7 @@ function sendMonitor(messageType, message) // Sends message to WS Clients
             });
         }
 
-        if (config.debug.keepalive === true && messageType != "keepalive")
+        if (config.debug.keepalive === true && messageType !== "keepalive")
         {
             console.log(notice("Message Sent to Monitor Websockets"));
         }
@@ -3238,7 +3121,7 @@ function sendAdmins(messageType, message) // Sends message to WS Clients
             console.log(messageToSend);
         }
 
-        if (messageType == "perf") // Send only to perf subs
+        if (messageType === "perf") // Send only to perf subs
         {
             Object.keys(clientAdminPerfConnections).forEach(function(key)
             {
@@ -3315,7 +3198,7 @@ function sendWorld(messageType, message, world) // Sends message to WS Clients f
             });
         }
 
-        if (config.debug.keepalive === true && messageType != "keepalive")
+        if (config.debug.keepalive === true && messageType !== "keepalive")
         {
             console.log(notice("Message Sent to Result Websockets"));
         }
@@ -3325,9 +3208,7 @@ function sendWorld(messageType, message, world) // Sends message to WS Clients f
 // Pings connections to see if they're still alive
 setInterval(function()
 {
-    var message = "ping!";
-
-    sendAll("keepalive", message);
+    sendAll("keepalive", "ping!");
 }, 5000);
 
 function sendAll(messageType, message) // Sends message to WS Clients
@@ -3371,25 +3252,26 @@ function DateCalc(d)
     minute = String(d.getUTCMinutes());
     seconds = String(d.getUTCSeconds());
 
-    if (month.length == 1) {
+    if (month.length === 1) {
         month = "0" + month;
     }
     day = String(d.getDate());
-    if (day.length == 1) {
+    if (day.length === 1) {
         day = "0" + day;
     }
-    if (hour.length == 1) // If needing a preceeding 0
+    if (hour.length === 1) // If needing a preceding 0
     {
         hour = "0"+hour;
     }
-    if (minute.length == 1)
+    if (minute.length === 1)
     {
         minute = "0"+minute;
     }
-    if (seconds.length == 1)
+    if (seconds.length === 1)
     {
         seconds = "0"+seconds;
     }
+
     return year+"-"+month+"-"+day+" "+hour+":"+minute+":"+seconds;
 }
 
@@ -3463,11 +3345,11 @@ function findPlayerName(playerID, world, callback)
                             console.log(notice("WORLD: "+world+" QUERY: "+url));
                         }
 
-                        if (success == 1)
+                        if (success === 1)
                         {
-                            var valid = returned.returned;
+                            var valid = parseInt(returned.returned);
 
-                            if (valid == 1)
+                            if (valid === 1)
                             {
                                 if (config.debug.census === true)
                                 {
@@ -3508,7 +3390,7 @@ function findPlayerName(playerID, world, callback)
 function findOutfitName(outfitID, world, callback)
 {
     var url;
-    if((outfitID == "-1") || (outfitID == "0"))
+    if (outfitID === "-1" || outfitID === "0")
     {
         return "";
     }
@@ -3628,7 +3510,7 @@ function checkPlayerCache(playerID, world, dbConnectionCache, callback)
                             expires: cacheExpires
                         };
 
-                        dbConnectionCache.query('INSERT INTO player_cache SET ?', insertPArray, function(err, result)
+                        dbConnectionCache.query('INSERT INTO player_cache SET ?', insertPArray, function(err)
                         {
                             if (err)
                             {
@@ -3684,7 +3566,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
         console.log(critical("OUTFIT ID: "+outfitID));
     }
 
-    if ((outfitID == -1) || (outfitID == "0"))
+    if (outfitID == "-1" || outfitID == "0")
     {
         if (config.debug.cache === true)
         {
@@ -3723,7 +3605,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
 
                         if (outfitName !== false)
                         {
-                            findPlayerName(leaderID, worldID, function(name, faction, br)
+                            findPlayerName(leaderID, worldID, function(name, faction)
                             {
                                 var now = Math.round(new Date().getTime() / 1000);
                                 var cacheExpires = now + 86400; // 1 Day
@@ -3737,7 +3619,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
                                     outfitWorld: worldID,
                                     expires: cacheExpires
                                 };
-                                dbConnectionCache.query('INSERT INTO outfit_cache SET ?', insertOArray, function(err, result)
+                                dbConnectionCache.query('INSERT INTO outfit_cache SET ?', insertOArray, function(err)
                                 {
                                     if (err)
                                     {
@@ -3792,7 +3674,7 @@ function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
     }
 }
 
-function calcWinners(message, resultID, Lresult, Fresult, dbConnection, callback)
+function calcWinners(message, resultID, Lresult, dbConnection, callback)
 {
     dbConnection.query("SELECT * FROM ws_results WHERE resultID="+resultID, function(error, result)
     {
@@ -3811,15 +3693,15 @@ function calcWinners(message, resultID, Lresult, Fresult, dbConnection, callback
 
         var empires = [
             {
-                score: Lresult[0].controlVS,
+                score: parseInt(Lresult[0].controlVS),
                 empire: 'VS'
             },
             {
-                score: Lresult[0].controlNC,
+                score: parseInt(Lresult[0].controlNC),
                 empire: 'NC'
             },
             {
-                score: Lresult[0].controlTR,
+                score: parseInt(Lresult[0].controlTR),
                 empire: 'TR'
             }
         ];
@@ -3852,7 +3734,7 @@ function calcWinners(message, resultID, Lresult, Fresult, dbConnection, callback
                 domination = 1;
             } else if (duration < 5390) { // If ended early, must be VP victory / domination
                 domination = 1;
-            } else if (empires[0].score == empires[1].score) {
+            } else if (empires[0].score === empires[1].score) {
                 winner = "DRAW";
                 draw = 1;
             }
@@ -4066,7 +3948,7 @@ function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, 
 
     if (!charFlags[charID])
     {
-        var push = {
+        charFlags[charID] = {
             "charID": charID,
             "vCharID": vCharID,
             "timestamp": timestamp,
@@ -4079,8 +3961,6 @@ function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, 
             "vName": vicName
         };
 
-        charFlags[charID] = push;
-
         if (charIDs !== undefined)
         {
             charIDs.push(charID);
@@ -4091,7 +3971,7 @@ function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, 
         }
     }
 
-    if (flag == "vKill")
+    if (flag === "vKill")
     {
         if (charFlags[charID].vKill === 0)
         {
@@ -4100,7 +3980,7 @@ function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, 
             charFlags[charID].vKill = 1;
         }
     }
-    else if (flag == "kill")
+    else if (flag === "kill")
     {
         if (charFlags[charID].kill === 0)
         {
@@ -4130,7 +4010,7 @@ setInterval(function()
             var killerID = charFlags[charID].charID;
             var victimID = charFlags[charID].vCharID;
 
-            if ((charFlags[charID].kill == 1) && (charFlags[charID].vKill == 1)) // Vehicle with Occ
+            if (charFlags[charID].kill === 1 && charFlags[charID].vKill === 1) // Vehicle with Occ
             {
                 if (config.debug.vehicles === true)
                 {
@@ -4183,10 +4063,8 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
             {
                 var Kquery;
                 var Vquery;
-                var iQueryK;
-                var iQueryV;
 
-                if (kID === 0) // If the kill was by infrantry
+                if (kID === 0) // If the kill was by infantry
                 {
                     switch(type)
                     {
@@ -4213,7 +4091,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     deathVCount: 0,
                     bails: 0,
                     resultID: resultID
-                }
+                };
                 
                 var vehicleTotalDeathObject = {
                     vehicleID: vID,
@@ -4225,7 +4103,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     deathVCount: 0,
                     bails: 0,
                     resultID: resultID
-                }
+                };
 
                 var vehiclePlayerKillObject = {
                     vehicleID: kID,
@@ -4238,7 +4116,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     deathVCount: 0,
                     bails: 0,
                     resultID: resultID
-                }
+                };
 
                 var vehiclePlayerDeathObject = {
                     vehicleID: vID,
@@ -4251,7 +4129,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     deathVCount: 0,
                     bails: 0,
                     resultID: resultID
-                }
+                };
 
                 var nanites = vehNanite[vID];
 
@@ -4304,7 +4182,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                     }
                 }
 
-                if (kID != 0)
+                if (kID !== 0)
                 {
                     // Killer Vehicle
                     dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Kquery+" WHERE vehicleID = "+kID+" AND resultID = "+resultID, function(err, result)
@@ -4330,11 +4208,11 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 console.log(resultID);
                             }
 
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalKillObject, function(err, result)
+                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalKillObject, function(err)
                             {
                                 if (err)
                                 {
-                                    if (err.errno != 1062) // If not a duplicate
+                                    if (err.errno !== 1062) // If not a duplicate
                                     {
                                         console.log(err);
                                         reportError(err, "Insert ws_vehicles_totals");
@@ -4367,11 +4245,11 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 console.log(resultID);
                             }
 
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles SET ?", vehiclePlayerKillObject, function(err, result)
+                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles SET ?", vehiclePlayerKillObject, function(err)
                             {
                                 if (err)
                                 {
-                                    if (err.errno != 1062) // If not a duplicate
+                                    if (err.errno !== 1062) // If not a duplicate
                                     {
                                         reportError(err, "Insert Vehicle Player Kill Record");
                                         throw(err);
@@ -4394,20 +4272,19 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 }
                             });
                         }
+                        var toSend = {
+                            vehicleID: kID,
+                            type: 'kill',
+                            iMetric: vehicleTotalKillObject.killICount,
+                            vMetric: vehicleTotalKillObject.killVCount,
+                            resultID: resultID
+                        };
+
+                        sendResult("vehicleCombat", toSend, resultID);
                     });
-
-                    var toSend = {
-                        vehicleID: kID,
-                        type: 'kill',
-                        iMetric: vehicleTotalKillObject.killICount,
-                        vMetric: vehicleTotalKillObject.killVCount,
-                        resultID: resultID
-                    };
-
-                    sendResult("vehicleCombat", toSend, resultID);
                 }
 
-                if (vID != 0)
+                if (vID !== 0)
                 {
                     // Victim Vehicle
                     dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, function(err, result)
@@ -4507,19 +4384,18 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 }
                             });
                         }
+                        var toSend = {
+                            vehicleID: vID,
+                            type: 'death',
+                            iMetric: vehiclePlayerDeathObject.deathICount,
+                            vMetric: vehiclePlayerDeathObject.deathVCount,
+                            bail: vehiclePlayerDeathObject.bails,
+                            nanites: nanites,
+                            resultID: resultID
+                        };
+
+                        sendResult("vehicleCombat", toSend, resultID);
                     });
-
-                    var toSend = {
-                        vehicleID: vID,
-                        type: 'death',
-                        iMetric: vehiclePlayerDeathObject.deathICount,
-                        vMetric: vehiclePlayerDeathObject.deathVCount,
-                        bail: vehiclePlayerDeathObject.bails,
-                        nanites: nanites,
-                        resultID: resultID
-                    };
-
-                    sendResult("vehicleCombat", toSend, resultID);
                 }
             }
 
@@ -4575,7 +4451,7 @@ function insertInitialMapData(data, callback)
                 success = 0;
             }
 
-            if (success == 1)
+            if (success === 1)
             {
                 var mapData = json["map_list"][0]["Regions"]["Row"];
 
@@ -4646,14 +4522,14 @@ function insertInitialMapData(data, callback)
             var statusMessage =
             {
                 type: "map",
-                id: resultID,
+                id: resultID
             };
 
             sendAdmins("eventStatus", statusMessage);
 
             var resultMessage =
             {
-                id: resultID,
+                id: resultID
             };
 
             sendResult("eventStatus", resultMessage);
@@ -4706,14 +4582,14 @@ function checkInstances(callback)
                     console.log(endmessage);
                 }
 
-                endAlert(endmessage, resultID, client, dbConnection, function(resultID)
+                endAlert(endmessage, resultID, dbConnection, function(resultID)
                 {
                     console.log(critical("FORCFULLY ENDED ALERT #"+resultID+" W: "+world+" - Z:"+zone));
                     reportError("Forced Ended alert #"+resultID, "Check Instances");
                 });
             }
 
-            dbConnection.query("SELECT * FROM ws_map_initial WHERE resultID = "+instances[key].resultID, function(error, result)
+            dbConnection.query("SELECT * FROM ws_map_initial WHERE resultID = "+instances[key].resultID, function(error)
             {
                 if (error)
                 {
@@ -4732,7 +4608,7 @@ function triggerLeaderboardUpdate(world) {
     var url = 'http://api.ps2alerts.com/v2/leaderboards/update?server='+world;
 
     http.get(url, function(res) {
-        if (res.statusCode == 202) {
+        if (res.statusCode === 202) {
             console.log(success("Successfully updated Leaderboard Endpoint for server:" + server))
         } else {
             console.log(critical("Leaderboard endpoint didn't accept update!"))
@@ -4740,16 +4616,10 @@ function triggerLeaderboardUpdate(world) {
     });
 }
 
-function resetConnection()
-{
-    wsClient = new persistentClient();
-}
 
 function fireSubscriptions(message, resultID, mode, event)
 {
     var world = String(message.world_id);
-    var zone = String(message.zone_id);
-    var started = String(message.start_time);
 
     if (config.toggles.combat === true)
     {
@@ -4845,7 +4715,7 @@ function setInstances(message, resultID, mode)
     var world = message.world_id;
     var zone = message.zone_id;
 
-    if (mode == "subscribe")
+    if (mode === "subscribe")
     {
         instances[resultID] = {
             status:     true,
@@ -4865,7 +4735,7 @@ function setInstances(message, resultID, mode)
     }
 }
 
-function restoreSubs(client, dbConnectionI, callback)
+function restoreSubs(dbConnectionI, callback)
 {
     instances = {}; // Clear object if reconnected or being rebuilt
 
@@ -4888,7 +4758,6 @@ function restoreSubs(client, dbConnectionI, callback)
                 var world      = String(resultInstance[i].world);
                 var zone       = String(resultInstance[i].zone);
                 var started    = String(resultInstance[i].started);
-                var endtime    = String(resultInstance[i].endtime);
                 var type       = String(resultInstance[i].type);
                 var resultID   = resultInstance[i].resultID;
                 var controlVS  = resultInstance[i].controlVS;
@@ -4925,7 +4794,6 @@ function restoreSubs(client, dbConnectionI, callback)
 /* Weapon Grouping shizzle by Anioth */
 
 var weaponMap = [];
-var weapons;
 
 function generate_weapons(callback)
 {
@@ -4974,8 +4842,6 @@ function generate_weapons(callback)
 }
 
 
-var combatHistoryProcessed = {};
-
 function combatHistory() // Called by generateActives function to log active alert history
 {
     var date = new Date();
@@ -5016,7 +4882,7 @@ function combatHistory() // Called by generateActives function to log active ale
 
                             sendResult("combatHistory", post, resultID);
 
-                            dbConnectionH.query("INSERT INTO ws_combat_history SET ?", post, function(err, result)
+                            dbConnectionH.query("INSERT INTO ws_combat_history SET ?", post, function(err)
                             {
                                 if (err)
                                 {
@@ -5091,11 +4957,6 @@ function handleDeadlock(query, location, tries)
         console.log(critical("DEADLOCK WAS HANDLED, BUT ERRORED."));
         console.log(critical("LOCATION: "+location));
     }
-}
-
-function getMapSnapshot(world, zone)
-{
-
 }
 
 /* Structure
@@ -5202,6 +5063,7 @@ function checkDuplicateMessages(message, callback)
     if (message.event_type !== undefined)
     {
         var eventType = message.event_type;
+        var timestamp = parseInt(message.payload.timestamp);
 
         if (config.debug.duplicates === true)
         {
@@ -5210,9 +5072,8 @@ function checkDuplicateMessages(message, callback)
 
         var status = false; // Duplicate unless proven otherwise
 
-        if (eventType == "Combat")
+        if (eventType === "Combat")
         {
-            var timestamp = message.payload.timestamp;
             var victimID = message.payload.victim_character_id;
 
             if (config.debug.duplicates === true)
@@ -5236,7 +5097,6 @@ function checkDuplicateMessages(message, callback)
         }
         else if (eventType === "FacilityControl")
         {
-            var timestamp = message.payload.timestamp;
             var facilityID = message.payload.facility_id;
             var blockUpdate = message.payload.is_block_update;
 
@@ -5257,15 +5117,14 @@ function checkDuplicateMessages(message, callback)
 
                     status = true;
                 }
-                else if (messagesDuplicates.FacilityControl[facilityID].timestamp == timestamp) // If a duplicate based off timestamp
+                else if (messagesDuplicates.FacilityControl[facilityID].timestamp === timestamp) // If a duplicate based off timestamp
                 {
                     status = false;
                 }
             }
         }
-        else if (eventType == "VehicleDestroy")
+        else if (eventType === "VehicleDestroy")
         {
-            var timestamp = message.payload.timestamp;
             var victimID = message.payload.victim_character_id;
 
             if (config.debug.duplicates === true)
@@ -5278,93 +5137,32 @@ function checkDuplicateMessages(message, callback)
                 messagesDuplicates.VehicleDestroy[victimID] =
                 {
                     timestamp: timestamp
-                }
+                };
 
                 status = true;
             }
-            else if (messagesDuplicates.VehicleDestroy[victimID].timestamp == timestamp) // If a duplicate based off timestamp
+            else if (messagesDuplicates.VehicleDestroy[victimID].timestamp === timestamp) // If a duplicate based off timestamp
             {
                 status = false;
             }
         }
-        else if (eventType == "MetagameEvent")
-        {
-            var timestamp = message.payload.timestamp;
-            var worldID = message.payload.world_id;
-            var zoneID = message.payload.zone_id;
-            var status = message.payload.status;
-
-            console.log(status);
-
-            if (config.debug.duplicates === true)
-            {
-                console.log(warning("Checking Alerts for World "+worldID+" for duplicates"));
-            }
-
-            /*if (status != 2)
-            {
-                status = true;
-            }
-            // Otherwise, if updates
-            else if (messagesDuplicates.MetagameEvent[worldID] === undefined)
-            {
-                messagesDuplicates.MetagameEvent[worldID] = {};
-
-                if (messagesDuplicates.MetagameEvent[worldID][zoneID] === undefined)
-                {
-                    messagesDuplicates.MetagameEvent[worldID][zoneID] = {
-                        world: worldID,
-                        zone: zoneID
-                    };
-                }
-
-                status = true;
-            }
-            else if (messagesDuplicates.MetagameEvent[worldID][zoneID].world == worldID && messagesDuplicates.MetagameEvent[worldID][zoneID].zone == zoneID)
-            // If a duplicate based off presense of the object
-            {
-                status = false;
-            }*/
-
-            status = true;
-        }
-        else if (eventType == "ExperienceEarned")
+        else if (eventType === "MetagameEvent")
         {
             status = true;
         }
-        else if (eventType == "AchievementEarned")
+        else if (eventType === "ExperienceEarned")
         {
             status = true;
         }
-        else if (eventType == "PopulationChange")
+        else if (eventType === "AchievementEarned")
         {
-            var timestamp = message.payload.timestamp;
-            var worldID = message.payload.world_id;
-            var zoneID = message.payload.zone_id;
-
-            /*if (config.debug.duplicates === true)
-            {
-                console.log(warning("Checking Populations for World "+worldID+" for duplicates"));
-            }
-
-            if (messagesDuplicates.PopulationChange[worldID] == undefined)
-            {
-                messagesDuplicates.PopulationChange[worldID] =
-                {
-                    world: worldID,
-                    zone: zoneID
-                }
-
-                status = true;
-            }
-            else if (messagesDuplicates.PopulationChange[worldID].world == worldID && messagesDuplicates.PopulationChange[worldID].zone == zoneID) // If a duplicate based off presense
-            {
-                status = false;
-            }*/
-
             status = true;
         }
-        else if (eventType == "ServiceStateChange")
+        else if (eventType === "PopulationChange")
+        {
+            status = true;
+        }
+        else if (eventType === "ServiceStateChange")
         {
             status = true;
         }
@@ -5401,7 +5199,7 @@ function calcEndTime(started, type) // Calculates estimated end time of an alert
         case '132':
         case '133':
         case '134':
-            toAdd = 1800;
+            toAdd = 2700;
             break;
     }
 
@@ -5419,15 +5217,25 @@ var clientWorldDebugConnections = {};
 
 var resultSubscriptions = {}; // Stores all connections on a per-alert basis
 
-// Set up the HTTPS server first before we pass on the websocket server
-const server = https.createServer({
-    cert: fs.readFileSync('./certs/cert.pem', 'utf8'),
-    key: fs.readFileSync('./certs/key.pem', 'utf8'),
-}).listen(config.serverPort);
+if (config.toggles.https) {
+    // Set up the HTTPS server first before we pass on the websocket server
+    const server = https.createServer({
+        cert: fs.readFileSync('./certs/cert.pem', 'utf8'),
+        key: fs.readFileSync('./certs/key.pem', 'utf8')
+    }).listen(config.serverPort);
 
-const wss = new WebSocket.Server({
-    server: server
-});
+    const wss = new WebSocket.Server({
+        server: server
+    });
+
+} else {
+    var WebSocketServer = require('ws').Server;
+
+    var wss = new WebSocketServer({
+        port: config.serverPort,
+        clientTracking: false //We do our own tracking.
+    });
+}
 
 wss.on('connection', function(clientConnection)
 {
@@ -5458,21 +5266,21 @@ wss.on('connection', function(clientConnection)
                 state: connectionState,
                 admin: admin,
                 response: 'auth'
-            }
+            };
 
             clientConnection.send(JSON.stringify(message));
 
-            if (config.debug.clients == true)
+            if (config.debug.clients === true)
             {
                 console.log(success("Websocket Connected - TOTAL: "+Object.keys(clientConnections).length));
                 console.log((new Date()) + ' User ' + username + ' connected. API Key: ' + apiKey);
             }
 
-            if (admin == true)
+            if (admin === true)
             {
-                if (config.debug.admin == true)
+                if (config.debug.admin === true)
                 {
-                    console.log(success("Admin successfuly authenticated!"));
+                    console.log(success("Admin successfully authenticated!"));
                 }
 
                 clientAdminConnections[clientConnection.id] = clientConnection; // Subscribe admin to admin object
@@ -5482,13 +5290,13 @@ wss.on('connection', function(clientConnection)
             {
                 try // Check if the message we get is valid json.
                 {
-                    var message = JSON.parse(message); //Messages Received From Census are Formated in JSON. Parse it, and you'll be able to access the data the same as a JSON object.
-                    message = message.payload;
+                    var JSON = JSON.parse(message); //Messages Received From Census are Formated in JSON. Parse it, and you'll be able to access the data the same as a JSON object.
+                    message = JSON.payload;
                 }
                 catch(exception)
                 {
                     console.log(message);
-                    console.log(critical("INVALID JSON RECIEVED"));
+                    console.log(critical("INVALID JSON RECEIVED"));
 
                     clientConnection.send('{"response":"Invalid Input"}');
                     message = null;
@@ -5496,7 +5304,7 @@ wss.on('connection', function(clientConnection)
 
                 if (message) // If valid
                 {
-                    if (message.action == "subscribe") // Subscribe to result
+                    if (message.action === "subscribe") // Subscribe to result
                     {
                         var resultID = message.resultID;
 
@@ -5511,14 +5319,14 @@ wss.on('connection', function(clientConnection)
                             resultSubscriptions[resultID][clientConnection.id] = clientConnection; // Put connection based on resultID into object to loop through
                         }
 
-                        if (config.debug.clients == true)
+                        if (config.debug.clients === true)
                         {
                             console.log(success("SUBSCRIBED WEBSOCKET TO ALERT #"+resultID));
                         }
 
                         clientConnection.send('{"messageType": "subscribed"}');
                     }
-                    else if (message.action == 'subscribe-world') {
+                    else if (message.action === 'subscribe-world') {
                         console.log('Subscribing to world messages');
                         var worldID = message.worldID;
                         
@@ -5533,14 +5341,14 @@ wss.on('connection', function(clientConnection)
                             clientWorldDebugConnections[worldID][clientConnection.id] = clientConnection; // Put connection based on worldID into object to loop through
                         }
 
-                        if (config.debug.clients == true)
+                        if (config.debug.clients === true)
                         {
                             console.log(success("SUBSCRIBED WEBSOCKET TO WORLD #"+worldID));
                         }
                         
                         clientConnection.send('{"messageType": "subscribed"}');
                     }
-                    else if (message.action == "timesync")
+                    else if (message.action === "timesync")
                     {
                         var clientTime = Math.floor(message.time);
                         var resultID = message.resultID;
@@ -5569,23 +5377,20 @@ wss.on('connection', function(clientConnection)
                             }
 
                             var diff = ( parseInt(clientTime) - parseInt(serverTime) );
+                            var remaining = 0;
 
-                            if (mode == "start")
+                            if (mode === "start")
                             {
-                                var remaining = parseInt(instances[resultID].startTime) - serverTime;
+                                remaining = parseInt(instances[resultID].startTime) - serverTime;
                             }
-                            else if (mode == "end")
+                            else if (mode === "end")
                             {
-                                var remaining = parseInt(instances[resultID].endTime) - serverTime;
-                            }
-                            else if (mode === undefined)
-                            {
-                                var remaining = "MODE NOT SELECTED!";
+                                remaining = parseInt(instances[resultID].endTime) - serverTime;
                             }
 
                             var correctTime = serverTime + remaining + diff;
 
-                            //console.log(notice("Recieved Timesync message"));
+                            //console.log(notice("Received Timesync message"));
 
                             clientConnection.send('{"messageType": "timeSync", "serverTime": '+serverTime+', "clientTime": '+clientTime+', "remaining": '+remaining+', "timediff":'+diff+', "correctTime":'+correctTime+'}');
 
@@ -5604,7 +5409,7 @@ wss.on('connection', function(clientConnection)
                             clientConnection.send('{"messageType": "timeSyncWait"}');
                         }
                     }
-                    else if (message.action == "alertStatus") // First call for the monitor
+                    else if (message.action === "alertStatus") // First call for the monitor
                     {
                         var messageToSendMonitor = {};
 
@@ -5620,7 +5425,7 @@ wss.on('connection', function(clientConnection)
                             var world = instances[key]['world'];
                             var zone = instances[key]['zone'];
 
-                            if(instances[key].status == true) // If theres an active alert
+                            if(instances[key].status === true) // If there's an active alert
                             {
                                 if (!activeAlertsReply[world])
                                 {
@@ -5641,7 +5446,7 @@ wss.on('connection', function(clientConnection)
 
                         clientConnection.send(JSON.stringify(messageToSendMonitor));
 
-                        if (config.debug.clients == true)
+                        if (config.debug.clients === true)
                         {
                             console.log(messageToSendMonitor);
                             console.log("SENT WEBSOCKET MONITOR CURRENT STATUS");
@@ -5665,24 +5470,24 @@ wss.on('connection', function(clientConnection)
 
                     // ADMIN FUNCTIONS //
 
-                    else if (message.type == "subscribePerf" && admin == true) // Admin functions
+                    else if (message.type === "subscribePerf" && admin === true) // Admin functions
                     {
                         clientAdminPerfConnections[clientConnection.id] = clientConnection;
                     }
-                    else if (message.type == "reloadPages" && admin == true)
+                    else if (message.type === "reloadPages" && admin === true)
                     {
-                        var resultID = message.resultID;
-
-                        sendResult("reload", "reload", resultID);
+                        sendResult("reload", "reload", message.resultID);
                     }
-                    else if (message.action == "middlemanStatus")
+                    else if (message.action === "middlemanStatus")
                     {
-                        console.log("Recieved middleman status request");
-                        var message = {
+                        console.log("Received middleman status request");
+
+                        var json = {
                             messageType: "middlemanStatus",
                             value: connectionState
                         };
-                        clientConnection.send(JSON.stringify(message));
+
+                        clientConnection.send(JSON.stringify(json));
                     }
                     
 
@@ -5692,14 +5497,14 @@ wss.on('connection', function(clientConnection)
         } // End of API Key if
         else // If API key is not valid or not authorised
         {
-            if (apiKey != undefined)
+            if (apiKey !== undefined)
             {
                 console.log(critical("UNAUTHORISED API KEY ATTEMPT! "+apiKey));
                 console.log(critical(JSON.stringify(message, null, 4)));
             }
             else
             {
-                if (config.debug.auth == true)
+                if (config.debug.auth === true)
                 {
                     console.log(critical("INVALID API KEY FORMAT DETECTED."));
                     console.log(critical("API KEY: "+apiKey));
@@ -5709,7 +5514,7 @@ wss.on('connection', function(clientConnection)
             clientConnection.close();
         }
 
-        clientConnection.on('close', function(code, message)
+        clientConnection.on('close', function()
         {
             delete clientConnections[clientConnection.id];
 
@@ -5718,7 +5523,7 @@ wss.on('connection', function(clientConnection)
                 delete clientAdminConnections[clientConnection.id];
             }
 
-            if (apiKey != undefined)
+            if (apiKey !== undefined)
             {
                 if (config.debug.clients === true)
                 {
@@ -5758,7 +5563,7 @@ setInterval(function()
                 "conns": conns,
                 "msgSec": messagesRecievedSec,
                 "msgLast": messagesRecievedLast * 2,
-                "state": connectionState,
+                "state": connectionState
             };
 
             sendAdmins("perf", perfStats);
@@ -5856,7 +5661,7 @@ function cleanCache()
 }
 
 var maintTimer = 30 * 1000;
-var maintenance = setInterval(function()
+setInterval(function()
 {
     if (config.debug.status === true && messagesRecieved > 5)
     {
@@ -5915,7 +5720,7 @@ function processActives(message) {
 
             var instanceFound = false;
             var alert = data[world].metagame_events[a];
-            var instanceID = alert.instance_id;
+            var instanceID = parseInt(alert.instance_id);
 
             if (config.debug.sync === true) {
                 console.log("Instance ID", instanceID);
@@ -5923,9 +5728,9 @@ function processActives(message) {
 
             // Check for the instanceID in the instances object
             Object.keys(instances).forEach(function(w) {
-                if (instances[w].instanceID == instanceID) {
+                if (instances[w].instanceID === instanceID) {
 
-                    if (config.debug.sync == true) {
+                    if (config.debug.sync === true) {
                         console.log(success("Alert found"));
                         console.log(notice(JSON.stringify(instances[w], null, 4)));
                     }
@@ -5969,4 +5774,4 @@ function processActives(message) {
             }
         });
     });
-};
+}
