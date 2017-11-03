@@ -896,7 +896,7 @@ function reportError(error, loc, severeError)
             time: time
         };
 
-        dbConnectionError.query('INSERT INTO ws_errors SET ?', errPost, function(err, result)
+        dbConnectionError.query('INSERT INTO ws_errors SET ?', errPost, function()
         {
             console.log(critical("++++++++++++++++++++++ ERROR DETECTED!!! ++++++++++++++++++++++"));
             console.log(notice(new Date().toString()));
@@ -1069,7 +1069,7 @@ function insertAlert(message, dbConnectionA, callback)
 
                     sendMonitor("alertStart", toSend);
 
-                    dbConnectionA.query('INSERT INTO ws_instances SET ?', monitorPost, function(err, result)
+                    dbConnectionA.query('INSERT INTO ws_instances SET ?', monitorPost, function(err)
                     {
                         if (err)
                         {
@@ -1192,7 +1192,7 @@ function endAlert(message, resultID, dbConnectionA, callback)
                                         console.log(success("RECORD UPDATED"));
                                         console.log("DELETING INSTANCE RECORD #"+resultID);
 
-                                        dbConnectionA.query('DELETE FROM ws_instances WHERE resultID='+resultID, function(err, result)
+                                        dbConnectionA.query('DELETE FROM ws_instances WHERE resultID='+resultID, function(err)
                                         {
                                             if (err)
                                             {
@@ -1313,7 +1313,7 @@ function updateMapData(message, resultID, dbConnectionMap, callback)
         sendResult("facility", post, resultID);
         sendMonitor("update", post);
 
-        dbConnectionMap.query('INSERT INTO ws_map SET ?', post, function(err, result)
+        dbConnectionMap.query('INSERT INTO ws_map SET ?', post, function(err)
         {
             if (err)
             {
@@ -1677,7 +1677,7 @@ function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
                     teamkills: combatArray.teamkill
                 };
 
-                dbConnectionW.query('INSERT INTO ws_weapons_totals SET ?', weaponTArray, function(err, result)
+                dbConnectionW.query('INSERT INTO ws_weapons_totals SET ?', weaponTArray, function(err)
                 {
                     if (err)
                     {
@@ -2152,7 +2152,7 @@ function batchUpdateFactionStats(callback)
                 console.log(JSON.stringify(object, null, 4));
             }
 
-            pool.query("UPDATE ws_factions SET killsVS=killsVS+"+object.killsVS+", killsNC=killsNC+"+object.killsNC+", killsTR=killsTR+"+object.killsTR+", deathsVS=deathsVS+"+object.deathsVS+", deathsNC=deathsNC+"+object.deathsNC+", deathsTR=deathsTR+"+object.deathsTR+", teamKillsVS=teamKillsVS+"+object.teamKillsVS+", teamKillsNC=teamKillsNC+"+object.teamKillsNC+", teamKillsTR=teamKillsTR+"+object.teamKillsTR+", suicidesVS=suicidesVS+"+object.suicidesVS+", suicidesNC=suicidesNC+"+object.suicidesNC+", suicidesTR=suicidesTR+"+object.suicidesTR+", headshotsVS=headshotsVS+"+object.headshotsVS+", headshotsNC=headshotsNC+"+object.headshotsNC+", headshotsTR=headshotsTR+"+object.headshotsTR+", totalKills=totalKills+"+object.totalKills+", totalDeaths=totalDeaths+"+object.totalDeaths+", totalTKs=totalTKs+"+object.totalTKs+", totalSuicides=totalSuicides+"+object.totalSuicides+", totalHeadshots=totalHeadshots+"+object.totalHeadshots+" WHERE resultID = "+key, function(err, result)
+            pool.query("UPDATE ws_factions SET killsVS=killsVS+"+object.killsVS+", killsNC=killsNC+"+object.killsNC+", killsTR=killsTR+"+object.killsTR+", deathsVS=deathsVS+"+object.deathsVS+", deathsNC=deathsNC+"+object.deathsNC+", deathsTR=deathsTR+"+object.deathsTR+", teamKillsVS=teamKillsVS+"+object.teamKillsVS+", teamKillsNC=teamKillsNC+"+object.teamKillsNC+", teamKillsTR=teamKillsTR+"+object.teamKillsTR+", suicidesVS=suicidesVS+"+object.suicidesVS+", suicidesNC=suicidesNC+"+object.suicidesNC+", suicidesTR=suicidesTR+"+object.suicidesTR+", headshotsVS=headshotsVS+"+object.headshotsVS+", headshotsNC=headshotsNC+"+object.headshotsNC+", headshotsTR=headshotsTR+"+object.headshotsTR+", totalKills=totalKills+"+object.totalKills+", totalDeaths=totalDeaths+"+object.totalDeaths+", totalTKs=totalTKs+"+object.totalTKs+", totalSuicides=totalSuicides+"+object.totalSuicides+", totalHeadshots=totalHeadshots+"+object.totalHeadshots+" WHERE resultID = "+key, function(err)
             {
                 if (err)
                 {
@@ -4257,7 +4257,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 }
                                 else
                                 {
-                                    dbConnectionVehicleKill.query("UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID, function(err, result)
+                                    dbConnectionVehicleKill.query("UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID, function(err)
                                     {
                                         if (err)
                                         {
@@ -4314,11 +4314,11 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 console.log(resultID);
                             }
 
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalDeathObject, function(err, result)
+                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalDeathObject, function(err)
                             {
                                 if (err)
                                 {
-                                    if (err.errno != 1062) // If not a duplicate
+                                    if (err.errno !== 1062) // If not a duplicate
                                     {
                                         console.log(err);
                                         reportError(err, "Inserting New Victim Vehicle Total Record #2");
@@ -4329,7 +4329,7 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 {
                                     setTimeout(function()
                                     {
-                                        dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, function(err, result)
+                                        dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, function(err)
                                         {
                                             if (err)
                                             {
@@ -4367,11 +4367,11 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                                 console.log(resultID);
                             }
 
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles SET ?", vehiclePlayerDeathObject, function(err, result)
+                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles SET ?", vehiclePlayerDeathObject, function(err)
                             {
                                 if (err)
                                 {
-                                    if (err.errno != 1062) // If not a duplicate
+                                    if (err.errno !== 1062) // If not a duplicate
                                     {
                                         console.log(err);
                                         reportError(err, "Insert Vehicle Player Victim Record #2");
