@@ -77,6 +77,8 @@ var activesNeeded = false; // A flag set when the activeAlert function requires 
  */
 var conWatcherInterval;
 var subWatcherInterval;
+var subscriptionDisplayTimeout = null;
+var subscriptionDisplayContent = {};
 
 var wsClient;
 var perfStats = {};
@@ -88,37 +90,116 @@ Admin API Keys
 
 var apiKeys = {};
 
-//Pulls API keys from the database so that clients may communicate with this websocket server safely
-function generate_api_keys()
-{
-    cachePool.getConnection(function(poolErr, dbConnection)
-    {
-        if (poolErr)
-        {
-            throw(poolErr);
-        }
+function dbQuery(query, dbPool, callback) {
+    // #lazycode
+    if (dbPool instanceof Function) {
+        callback = dbPool;
+        dbPool = 'pool';
+    }
 
-        dbConnection.query('SELECT * FROM APIUsers', function(err, result)
-        {
-            dbConnection.release();
-
-            if (err)
-            {
-                throw(err);
+    if (dbPool === 'cache') {
+        cachePool.query(query, function(err, returns) {
+            if (err) {
+                throw (err);
             }
-            else
-            {
-                for (var i = result.length - 1; i >= 0; i--) // Build the API key object
-                {
-                    apiKeys[i] = {};
+            return callback(returns);
+        });
+    } else {
+        pool.query(query, function(err, returns) {
+            if (err) {
+                throw (err);
+            }
+            return callback(returns);
+        });
+    }
+}
 
-                    apiKeys[i].apikey = String(result[i].apikey);
-                    apiKeys[i].user = result[i].user;
-                    apiKeys[i].site = result[i].site;
-                    apiKeys[i].admin = result[i].admin;
+function dbQueryParameter(query, data, dbPool, callback) {
+    // #lazycode
+    if (dbPool instanceof Function) {
+        callback = dbPool;
+        dbPool = 'pool';
+    }
+
+    if (dbPool === 'cache') {
+        cachePool.query(query, data, function(err, returns) {
+            if (err) {
+                if (err.errno === 1213) { // If deadlock
+                    handleDeadlock(query); // Call upon itself to try again.
+                } else {
+                    throw (err);
                 }
             }
+            if (callback) {
+                return callback(returns);
+            }
         });
+    } else {
+        pool.query(query, data, function(err, returns) {
+            if (err) {
+                if (err.errno === 1213) { // If deadlock
+                    handleDeadlock(query); // Call upon itself to try again.
+                } else {
+                    throw (err);
+                }
+            }
+            if (callback) {
+                return callback(returns);
+            }
+        });
+    }
+}
+
+function handleDeadlock(query, tries) {
+    if (tries === undefined) {
+        tries = 0;
+    }
+    tries = tries++;
+
+    if (config.debug.deadlocks === true) {
+        console.log(warning("Handling deadlock! Try #"+tries));
+        console.trace();
+    }
+
+    if (tries < 20) {
+        var rand = Math.random() * (1000 - 250) + 250;
+
+        setTimeout(function() {
+            pool.query(query, function(err, result) {
+                if (err) {
+                    if (err.errno === 1213) { // If deadlock
+                        handleDeadlock(query, tries); // Call upon itself to try again.
+                    }
+                }
+
+                if (result) {
+                    if (result.affectedRows > 0 && config.debug.deadlocks === true) {
+                        console.log(warning("Deadlock / Duplicate handled!"));
+                    }
+                } else {
+                    reportError(query, "ERROR HANDLING DEADLOCK");
+                    console.log(query);
+                }
+            });
+        }, rand);
+    } else {
+        var error = new Error().stack;
+        reportError(query, "ERROR HANDLING DEADLOCK!");
+        reportError(error, "ERROR HANDLING DEADLOCK!");
+    }
+}
+
+//Pulls API keys from the database so that clients may communicate with this websocket server safely
+function generate_api_keys() {
+    dbQuery('SELECT * FROM APIUsers', 'cache', function(result) {
+        for (var i = result.length - 1; i >= 0; i--) {
+            apiKeys[i] = {};
+
+            apiKeys[i].apikey = String(result[i].apikey);
+            apiKeys[i].user = result[i].user;
+            apiKeys[i].site = result[i].site;
+            apiKeys[i].admin = result[i].admin;
+        }
     });
 }
 
@@ -197,8 +278,7 @@ function persistentClient()
     var connected = true;
 
     //Return Status of connection.
-    this.isConnected = function()
-    {
+    this.isConnected = function() {
         return connected;
     };
 
@@ -207,28 +287,19 @@ function persistentClient()
     client = new WebSocket('ws://push.api.blackfeatherproductions.com/?apikey='+config.extendedAPIKey); // Jhett's API
 
     // Websocket Event callbacks
-    client.on('open', function()
-    {
+    client.on('open', function() {
         console.log(success("CONNECTED"));
 
         connectionState = 1;
 
-        pool.getConnection(function(poolErr, dbConnectionI)
-        {
-            if (poolErr) { throw (poolErr); }
-
-            restoreSubs(dbConnectionI, function() // Fire subscriptions if they are needed
-            {
-                console.log(success("Subscriptions restored!"));
-                dbConnectionI.release();
-            });
+        restoreSubs(function() { // Fire subscriptions if they are needed
+            console.log(success("Subscriptions restored!"));
         });
 
         setMaintenanceInterval();
     });
 
-    client.on('message', function(data)
-    {
+    client.on('message', function(data) {
         if(config.debug.datadump === true)
         {
             console.log(data);
@@ -237,14 +308,12 @@ function persistentClient()
         processMessage(data, client);
     });
 
-    client.on('error', function(error)
-    {
+    client.on('error', function(error) {
         console.log((new Date()) + error.toString());
         connected = false;
     });
 
-    client.on('close', function(code)
-    {
+    client.on('close', function(code) {
         console.log(critical(new Date()) + ' CLIENT Websocket Connection Closed [' + code +']');
         connected = false;
         clearInterval(maintInterval);
@@ -273,40 +342,15 @@ var worldStatus = { // Assuming online always at first run
     2001: 'online'
 };
 
-function checkMapInitial(dbConnectionMap, callback)
-{
-    Object.keys(instances).forEach(function(key) {
-        dbConnectionMap.query("SELECT * FROM ws_map_initial WHERE resultID = "+instances[key].resultID, function(err, result) {
-            if (err)
-            {
-                throw(err);
-            }
-
-            if (result[0] === undefined) { // If no map initial records exist, run it
-
-                console.log(critical("MAP INITIAL MISSING FOR ALERT: #"+instances[key].resultID));
-                insertInitialMapData(instances[key], function()
-                {
-                    console.log(success("Inserted Initial Map data succesfully"));
-                });
-            }
-        });
-    });
-
-    callback();
-}
-
 function onConnect(client) // Set up the websocket
 {
-    if (config.debug.clients === true)
-    {
+    if (config.debug.clients === true) {
         console.log(new Date() + ' WebSocket client connected!');
     }
 
     //"outfits":["37514584004240963"] 37514584004240963 DIGT | 37524142189447090 = PS2AlertsTesting
 
-    if (config.toggles.metagame === true) // If alerts are enabled
-    {
+    if (config.toggles.metagame === true) { // If alerts are enabled
         console.log(success("SENDING METAGAME SUBSCRIPTION MESSAGE"));
         var alertsMessage  = '{"action":"subscribe","event":"MetagameEvent","all":"true"}'; // Subscribe to all alerts that happen
 
@@ -316,8 +360,7 @@ function onConnect(client) // Set up the websocket
             reportError("Error: "+e, "Metagame Subscription Message Failed", true);
         }
 
-        if (config.toggles.populationchange === true)
-        {
+        if (config.toggles.populationchange === true) {
             var populationChangeMessage = '{"action":"subscribe","event":"PopulationChange","population_types":["zone"]}';
 
             console.log(success(populationChangeMessage));
@@ -332,8 +375,7 @@ function onConnect(client) // Set up the websocket
         }
     }
 
-    if (config.debug.instances === true)
-    {
+    if (config.debug.instances === true) {
         console.log("INSTANCES ARRAY BUILT");
 
         console.log("============= INSTANCES DETECTED ===============");
@@ -345,6 +387,24 @@ function onConnect(client) // Set up the websocket
     clearInterval(eventsMonitor);
 }
 
+function checkMapInitial(callback)
+{
+    Object.keys(instances).forEach(function(key) {
+        dbQuery("SELECT * FROM ws_map_initial WHERE resultID = "+instances[key].resultID, function(result) {
+            if (result[0] === undefined) { // If no map initial records exist, run it
+
+                console.log(critical("MAP INITIAL MISSING FOR ALERT: #"+instances[key].resultID));
+                insertInitialMapData(instances[key], function()
+                {
+                    console.log(success("Inserted Initial Map data succesfully"));
+                });
+            }
+        });
+    });
+
+    callback();
+}
+
 var eventTypes = ['MetagameEvent', 'Combat', 'FacilityControl', 'VehicleDestroy', 'PopulationChange', 'ExperienceEarned', 'AchievementEarned'];
 
 //Processes Messages received from the client.
@@ -352,20 +412,17 @@ function processMessage(messageData, client)
 {
     var message;
 
-    try // Check if the message we get is valid json.
-    {
+    try  {// Check if the message we get is valid json.
         message = JSON.parse(messageData);
     }
-    catch(exception)
-    {
+    catch(exception) {
         console.log(messageData);
         message = null;
 
         reportError("FAILURE TO PARSE JSON", messageData);
     }
 
-    if (message) // If valid
-    {
+    if (message) { // If valid
         if (config.toggles.sync === true) {
             if (message.action && message.action === "activeMetagameEvents") {
                 if (config.debug.sync === true) {
@@ -378,18 +435,13 @@ function processMessage(messageData, client)
         var eventType  = message.event_type;
         var eventCheck = eventTypes.indexOf(eventType);
 
-        checkDuplicateMessages(message, function(messageValid)
-        {
-            if (messageValid === true)
-            {
-                if (eventCheck !== -1) // If a valid event type
-                {
+        checkDuplicateMessages(message, function(messageValid) {
+            if (messageValid === true) {
+                if (eventCheck !== -1) { // If a valid event type
                     message = message.payload;
 
-                    if (eventType === "MetagameEvent" && config.toggles.metagame === true) // Alert Processing
-                    {
-                        if (config.debug.metagame === true)
-                        {
+                    if (eventType === "MetagameEvent" && config.toggles.metagame === true) { // Alert Processing
+                        if (config.debug.metagame === true) {
                             console.log(JSON.stringify(message, null, 4));
                         }
 
@@ -398,41 +450,24 @@ function processMessage(messageData, client)
                         var zone = parseInt(message.zone_id);
                         var alertStatus = parseInt(message.status);
 
-                        APIAlertTypes(alertType, function(typeData) // Check if alerts are supported
-                        {
-                            if (typeData !== null) // If a valid alert type
-                            {
-                                if (!zone)
-                                {
+                        APIAlertTypes(alertType, function(typeData) { // Check if alerts are supported
+                            if (typeData !== null) { // If a valid alert type
+                                if (!zone) {
                                     console.log(critical(JSON.stringify(message, null, 4)));
                                     throw("MISSING ZONE ID FOR WORLD: "+world);
                                 }
 
                                 console.log(notice("Processing Alert Message"));
 
-                                findResultID(message, eventType, function(resultIDArray) // Get resultID for all functions
-                                {
-                                    if (alertStatus === 1) // If started
-                                    {
-                                        if (world !== 19)
-                                        {
-                                            if (resultIDArray.length === 0)
-                                            {
-                                                pool.getConnection(function(poolErr, dbConnection) {
-                                                    if (poolErr) {
-                                                        throw(poolErr);
-                                                    }
-
-                                                    console.log(success("================== STARTING ALERT! =================="));
-                                                    insertAlert(message, dbConnection, function(resultID)
-                                                    {
-                                                        console.log(success("================ INSERTED NEW ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
-                                                        dbConnection.release();
-                                                    });
+                                findResultID(message, eventType, function(resultIDArray) { // Get resultID for all functions
+                                    if (alertStatus === 1) { // If started
+                                        if (world !== 19) {
+                                            if (resultIDArray.length === 0) {
+                                                console.log(success("================== STARTING ALERT! =================="));
+                                                insertAlert(message, function(resultID) {
+                                                    console.log(success("================ INSERTED NEW ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
                                                 });
-                                            }
-                                            else
-                                            {
+                                            } else {
                                                 console.log(critical("RESULT ALREADY FOUND, IGNORING"));
                                                 reportError("Result already found. "+JSON.stringify(message, null, 4), "Insert Alert");
                                             }
@@ -442,13 +477,11 @@ function processMessage(messageData, client)
                                             console.log(critical("Recieved Jaeger Alert Start message. Ignored."));
                                         }
                                     }
-                                    else if (alertStatus === 0) // If alert end
-                                    {
+                                    else if (alertStatus === 0) { // If alert end
                                         console.log(notice(resultIDArray));
                                         var resultID = resultIDArray[0];
 
-                                        if (resultID !== undefined)
-                                        {
+                                        if (resultID !== undefined) {
                                             pool.getConnection(function(poolErr, dbConnection) {
                                                 if (poolErr) {
                                                     throw(poolErr);
@@ -461,104 +494,66 @@ function processMessage(messageData, client)
                                                 });
                                             });
                                         }
-                                        else
-                                        {
+                                        else {
                                             reportError("UNDEFINED RESULT ID ALERT END - World: "+world, "End Alert");
                                         }
                                     }
-                                    else if (alertStatus === 2)
-                                    {
-                                        if (config.debug.metagame === true)
-                                        {
+                                    else if (alertStatus === 2) {
+                                        if (config.debug.metagame === true) {
                                             console.log("Alert update received.");
                                         }
                                     }
                                 });
                             }
-                            else
-                            {
+                            else {
                                 console.log(critical("INVALID / UNSUPPORTED ALERT TYPE: "+alertType+" - WORLD: #"+world));
                                 reportError("UNSUPPORTED ALERT TYPE DETECTED: "+alertType, "Insert Alert");
                             }
                         });
                     }
-                    else
-                    {
-                        findResultID(message, eventType, function(resultIDArray) // Get resultID for all functions
-                        {
-                            if (config.debug.resultID === true && config.debug.jaeger === false)
-                            {
-                                if (resultIDArray.length === 0)
-                                {
+                    else {
+                        findResultID(message, eventType, function(resultIDArray) { // Get resultID for all functions
+                            if (config.debug.resultID === true && config.debug.jaeger === false) {
+                                if (resultIDArray.length === 0) {
                                     console.log(critical("RESULT ID COULD NOT BE FOUND!"));
                                     console.log(resultIDArray);
                                 }
-                                else
-                                {
+                                else {
                                     console.log(notice("ResultIDs Found:"));
                                     console.log(resultIDArray);
                                 }
                             }
 
-                            for (var i = resultIDArray.length - 1; i >= 0; i--)
-                            {
+                            for (var i = resultIDArray.length - 1; i >= 0; i--) {
                                 var resultID = resultIDArray[i];
-                                if (config.toggles.combat === true)
-                                {
-                                    if (eventType === "Combat") // If a combat event
-                                    {
-                                        cachePool.getConnection(function(poolErr, dbConnectionCache)
-                                        {
-                                            if (poolErr)
-                                            {
-                                                throw(poolErr);
-                                            }
-
-                                            combatParse(message, resultID, dbConnectionCache, function() {
-                                                dbConnectionCache.release();
-                                            })
+                                if (config.toggles.combat === true) {
+                                    if (eventType === "Combat") {// If a combat event
+                                        combatParse(message, resultID, function() {
+                                            console.log('Combat message successfully parsed');
                                         });
                                     }
                                 }
-                                if (config.toggles.facilitycontrol === true)
-                                {
-                                    if (eventType === "FacilityControl") // If a territory Update
-                                    {
-                                        if (resultID)
-                                        {
-                                            pool.getConnection(function(poolErr, dbConnectionMap)
-                                            {
-                                                if (poolErr)
-                                                {
-                                                    throw(poolErr);
-                                                }
-                                                updateMapData(message, resultID, dbConnectionMap, function()
-                                                {
-                                                    dbConnectionMap.release();
-                                                    console.log(success("PROCESSED FACILITY CONTROL"));
-                                                });
+                                if (config.toggles.facilitycontrol === true) {
+                                    if (eventType === "FacilityControl") { // If a territory Update
+                                        if (resultID) {
+                                            updateMapData(message, resultID, function() {
+                                                console.log(success("PROCESSED FACILITY CONTROL"));
                                             });
                                         }
                                     }
                                 }
-                                if (config.toggles.vehicledestroy === true)
-                                {
-                                    if (eventType === "VehicleDestroy")
-                                    {
-                                        insertVehicleStats(message, resultID, 0, function()
-                                        {
-                                            if (config.debug.vehicles === true)
-                                            {
+                                if (config.toggles.vehicledestroy === true) {
+                                    if (eventType === "VehicleDestroy") {
+                                        insertVehicleStats(message, resultID, 0, function() {
+                                            if (config.debug.vehicles === true) {
                                                 console.log(success("PROCESSED VEHICLE KILLS"));
                                             }
                                         });
                                     }
                                 }
 
-                                if (config.toggles.populationchange === true)
-                                {
-                                    if (eventType === "PopulationChange")
-                                    {
+                                if (config.toggles.populationchange === true) {
+                                    if (eventType === "PopulationChange") {
                                         var VSPop    = message.population_vs;
                                         var NCPop    = message.population_nc;
                                         var TRPop    = message.population_tr;
@@ -566,15 +561,12 @@ function processMessage(messageData, client)
                                         var world    = parseInt(message.world_id);
                                         var zone     = parseInt(message.zone_id);
 
-                                        if (config.debug.population === true)
-                                        {
+                                        if (config.debug.population === true) {
                                             console.log(notice("POPULATION CHANGE DETECTED"));
-
                                             console.log(message);
                                         }
 
-                                        if (populationInstances[resultID] === undefined)
-                                        {
+                                        if (populationInstances[resultID] === undefined) {
                                             populationInstances[resultID] = {
                                                 VS: 0,
                                                 NC: 0,
@@ -594,195 +586,121 @@ function processMessage(messageData, client)
                                             zone: zone
                                         };
 
-                                        if (config.debug.population === true)
-                                        {
+                                        if (config.debug.population === true) {
                                             console.log(populationInstances[resultID]);
                                         }
 
-                                        insertPopulationStats(resultID, dbConnection, function()
-                                        {
-                                            if (config.debug.population === true)
-                                            {
+                                        insertPopulationStats(resultID, function() {
+                                            if (config.debug.population === true) {
                                                 console.log("Processed Population Data");
                                             }
                                         });
                                     }
                                 }
 
-                                if (config.toggles.xpmessage === true)
-                                {
-                                    if (eventType === "ExperienceEarned")
-                                    {
-                                        pool.getConnection(function(poolErr, dbConnectionXP)
-                                        {
-                                            if (poolErr)
-                                            {
-                                                throw(poolErr);
-                                            }
-                                            insertExperience(message, resultID, dbConnectionXP, function()
-                                            {
-                                                dbConnectionXP.release();
-                                            });
-                                        });
+                                if (config.toggles.xpmessage === true) {
+                                    if (eventType === "ExperienceEarned") {
+                                        insertExperience(message, resultID);
                                     }
                                 }
 
-                                if (config.toggles.achievements === true)
-                                {
-                                    if (eventType === "AchievementEarned")
-                                    {
-                                        pool.getConnection(function(poolErr, dbAchievements)
-                                        {
-                                            if (poolErr)
-                                            {
-                                                throw(poolErr);
-                                            }
-                                            insertAchievement(message, resultID, dbAchievements, function()
-                                            {
-                                                dbAchievements.release();
-                                            });
-                                        });
+                                if (config.toggles.achievements === true) {
+                                    if (eventType === "AchievementEarned") {
+                                        insertAchievement(message, resultID);
                                     }
                                 }
                             } // End of result forEach
                         });
                     }
-                }
-                else // If a system message
-                {
+                } else { // If a system message
                     var known = 0;
-                    if (message.websocket_event)
-                    {
+                    if (message.websocket_event) {
                         onConnect(client);
                         console.log(message);
-
                     }
 
-                    if (message.subscriptions !== undefined)
-                    {
+                    if (message.subscriptions !== undefined) {
                         known = 1;
                         subscriptions = 1;
-                        if(message.subscriptions.Combat !== undefined)
-                        {
-                            console.log(notice("COMBAT SUBS:"));
-                            console.log(message.subscriptions.Combat.worlds);
-                            console.log(message.subscriptions.Combat.zones);
-                            console.log("----------------------------");
+
+                        if (message.subscriptions.Combat !== undefined) {
+                            subscriptionDisplay(message.subscriptions.Combat.worlds, 'Combat', 'worlds', true);
+                            subscriptionDisplay(message.subscriptions.Combat.zones, 'Combat', 'zones', true);
                         }
 
-                        if (message.subscriptions.FacilityControl !== undefined)
-                        {
-                            console.log(notice("FACILITY CONTROL SUBS:"));
-                            console.log(message.subscriptions.FacilityControl.worlds);
-                            console.log(message.subscriptions.FacilityControl.zones);
-                            console.log("----------------------------");
+                        if (message.subscriptions.FacilityControl !== undefined) {
+                            subscriptionDisplay(message.subscriptions.FacilityControl.worlds, 'FacilityControl', 'worlds', true);
+                            subscriptionDisplay(message.subscriptions.FacilityControl.zones, 'FacilityControl', 'zones', true);
                         }
 
-                        if(message.subscriptions.VehicleDestroy !== undefined)
-                        {
-                            console.log(notice("VEHICLE COMBAT SUBS:"));
-                            console.log(message.subscriptions.VehicleDestroy.worlds);
-                            console.log(message.subscriptions.VehicleDestroy.zones);
-                            console.log("----------------------------");
+                        if (message.subscriptions.VehicleDestroy !== undefined) {
+                            subscriptionDisplay(message.subscriptions.VehicleDestroy.worlds, 'VehicleDestroy', 'worlds', true);
+                            subscriptionDisplay(message.subscriptions.VehicleDestroy.zones, 'VehicleDestroy', 'zones', true);
                         }
 
-                        if(message.subscriptions.PopulationChange !== undefined)
-                        {
-                            console.log(notice("POPUALTION CHANGE SUBS:"));
-                            console.log(message.subscriptions.PopulationChange.worlds);
-                            console.log(message.subscriptions.PopulationChange.zones);
-                            console.log("----------------------------");
+                        if (message.subscriptions.PopulationChange !== undefined) {
+                            subscriptionDisplay(message.subscriptions.PopulationChange.worlds, 'PopulationChange', 'worlds', true);
+                            subscriptionDisplay(message.subscriptions.PopulationChange.zones, 'PopulationChange', 'zones', true);
                         }
 
-                        if(message.subscriptions.MetagameEvent !== undefined)
-                        {
-                            console.log(notice("METAGAME SUBS RECIEVED:"));
-
-                            if (config.debug.API === true)
-                            {
-                                console.log(message.subscriptions.MetagameEvent);
-                            }
+                        if (message.subscriptions.MetagameEvent !== undefined) {
+                            subscriptionDisplay(message.subscriptions.MetagameEvent, 'MetagameEvent', 'Metagames', true);
                         }
                     }
 
-                    if (message.action === "activeAlerts")
-                    {
+                    if (message.action === "activeAlerts") {
                         known = 1;
-                        console.log(notice("ACTIVE ALERTS RECIEVED:"));
+                        console.log(notice("ACTIVE ALERTS RECEIVED:"));
 
-                        if (config.debug.API === true)
-                        {
+                        if (config.debug.API === true) {
                             console.log(message);
                         }
                     }
 
-                    if (message.event_type === "ServiceStateChange")
-                    {
+                    if (message.event_type === "ServiceStateChange") {
                         known = 1;
                         var payloadOnline = parseInt(message.payload.online);
-                        if (payloadOnline !== undefined)
-                        {
+
+                        if (payloadOnline !== undefined) {
                             var time = new Date().getTime();
                             time = parseInt(time / 1000); // To convert to seconds
 
-                            if (lastWorldDisruption[worldID] === undefined)
-                            {
+                            var worldID = message.payload.world_id;
+
+                            if (lastWorldDisruption[worldID] === undefined) {
                                 lastWorldDisruption[worldID] = null;
                             }
 
-                            var worldID = message.payload.world_id;
-                            if (payloadOnline === 0)
-                            {
+                            if (payloadOnline === 0) {
                                 worldStatus[worldID] = "offline";
                                 lastWorldDisruption[worldID] = time;
 
-                                console.log(critical("WORLD #"+worldID+" HAS CRASHED!"));
-                            }
-                            else if (payloadOnline === 1)
-                            {
+                                reportError("WORLD #"+worldID+" HAS CRASHED!", "World disruption");
+                            } else if (payloadOnline === 1) {
+                                var limit = 0;
                                 worldStatus[worldID] = "online";
-                                console.log(success("WORLD #"+worldID+" IS ONLINE!"));
-
                                 activesNeeded = true;
 
-                                var limit = lastWorldDisruption[worldID] + 30; // Last recorded disruption + 30 seconds
-                                if (time > limit)
-                                {
-                                    console.log(critical("LOGGING WORLD #"+worldID+" DISRUPTION"));
-
-                                    reportError("World :"+worldID+" has failed!", "World disruption");
-
-                                    pool.getConnection(function(poolErr, dbConnectionDist)
-                                    {
-                                        if (poolErr)
-                                        {
-                                            throw(poolErr);
-                                        }
-
-                                        if (lastWorldDisruption[worldID] === null)
-                                        {
-                                            lastWorldDisruption[worldID] = time - 30;
-                                        }
-
-                                        var insertDisruption = {
-                                            started: lastWorldDisruption[worldID],
-                                            ended: time,
-                                            world: worldID
-                                        };
-
-                                        dbConnectionDist.query("INSERT INTO ws_disruption SET ?", insertDisruption, function(err)
-                                        {
-                                            if (err)
-                                            {
-                                                reportError(err, "Insert Disruption");
-                                            }
-
-                                            dbConnectionDist.release();
-                                        });
-                                    });
+                                if (lastWorldDisruption[worldID]) {
+                                    limit = lastWorldDisruption[worldID] + 30;
                                 }
-                                else
-                                {
+
+                                if (limit !== 0 && time > limit) {
+                                    console.log(success("WORLD #"+worldID+" HAS RECOVERED!"));
+                                    reportError("World: "+worldID+" has recovered", "World recovery");
+
+                                    if (lastWorldDisruption[worldID] === null) {
+                                        lastWorldDisruption[worldID] = time - 30;
+                                    }
+
+                                    var insertDisruption = {
+                                        started: lastWorldDisruption[worldID],
+                                        ended: time,
+                                        world: worldID
+                                    };
+
+                                    dbQueryParameter("INSERT INTO ws_disruption SET ?", insertDisruption);
+                                } else if (lastWorldDisruption[worldID]) {
                                     console.log(notice("World disruption was out of limit"));
                                 }
 
@@ -791,25 +709,19 @@ function processMessage(messageData, client)
                         }
                     }
 
-                    if (known === 0) // If unknown message
-                    {
-                        console.log(message);
-                        console.log(notice("Ignoring message."));
+                    if (known === 0) { // If unknown message
+                        console.log(notice("Ignoring message: \n" + message));
                     }
                 }
             }
-            else
-            {
-                if (eventType !== "PopulationChange")
-                {
-                    var date = new Date();
-                    console.log(critical("Type: "+eventType));
-                    if (config.debug.duplicates === true)
-                    {
-                        console.log(notice(JSON.stringify(message, null, 4)));
-                    }
-                    console.log(critical("DUPLICATE MESSAGE DETECTED ON W: "+message.payload.world_id+" - Z: "+message.payload.zone_id+", IGNORING! "+date));
+            else if (eventType !== "PopulationChange") {
+                var date = new Date();
+                console.log(critical("Type: "+eventType));
+
+                if (config.debug.duplicates === true) {
+                    console.log(notice(JSON.stringify(message, null, 4)));
                 }
+                console.log(critical("DUPLICATE MESSAGE DETECTED ON W: "+message.payload.world_id+" - Z: "+message.payload.zone_id+", IGNORING! "+date));
             }
         });
     }
@@ -830,44 +742,30 @@ function findResultID(message, eventType, callback)
     var time = new Date().getTime();
     time = parseInt(time / 1000); // To convert to seconds
 
-    Object.keys(instances).forEach(function(key)
-    {
-        if (instances[key].world === world && instances[key].zone === zone)
-        {
+    Object.keys(instances).forEach(function(key) {
+        if (instances[key].world === world && instances[key].zone === zone) {
             var startTime = instances[key].startTime;
             var endTime = instances[key].endTime;
 
-            if (isNaN(startTime) === true)
-            {
+            if (isNaN(startTime) === true) {
                 console.log(instances[key]);
                 throw('startTime is NaN for instance');
             }
 
-            if (isNaN(endTime) === true)
-            {
+            if (isNaN(endTime) === true) {
                 console.log(instances[key]);
                 throw('endTime is NaN for instance');
             }
 
-            if (eventType !== "MetagameEvent" && eventType !== "PopulationChange")
-            {
-                console.log('startTime', startTime);
-                console.log('endTime', endTime);
-                console.log('time', time);
-                if (startTime < time && endTime > time) // If message is still within time
-                {
+            if (eventType !== "MetagameEvent" && eventType !== "PopulationChange") {
+                if (startTime < time && endTime > time) { // If message is still within time
                     returnedResults.push(instances[key].resultID);
                 }
-                else
-                {
-                    if (config.debug.resultID === true)
-                    {
-                        console.log(warning("MESSAGE RECEIVED OUT OF GAME TIME FOR RESULT #"+instances[key].resultID));
-                    }
+                else if (config.debug.resultID === true) {
+                    console.log(warning("MESSAGE RECEIVED OUT OF GAME TIME FOR RESULT #"+instances[key].resultID));
                 }
             }
-            else
-            {
+            else {
                 returnedResults.push(instances[key].resultID);
             }
         }
@@ -884,30 +782,18 @@ function reportError(error, loc, severeError)
     console.log(critical("LOCATION: "+loc));
     console.log(critical("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"));
 
-    pool.getConnection(function(poolErr, dbConnectionError)
-    {
-        if (poolErr)
-        {
-            throw(poolErr);
+    var time = new Date().getTime() / 1000;
+
+    var errPost = {
+        errorReturned: error,
+        errorLocation: loc,
+        time: parseInt(time)
+    };
+
+    dbQueryParameter('INSERT INTO ws_errors SET ?', errPost, function() {
+        if (severeError === true) {
+            resetScript();
         }
-
-        var time = new Date().getTime() / 1000;
-
-        var errPost =
-        {
-            errorReturned: error,
-            errorLocation: loc,
-            time: parseInt(time)
-        };
-
-        dbConnectionError.query('INSERT INTO ws_errors SET ?', errPost, function()
-        {
-            dbConnectionError.release();
-
-            if (severeError === true) {
-                resetScript();
-            }
-        });
     });
 }
 
@@ -929,7 +815,7 @@ function resetScript() {
  * }
  */
 
-function insertAlert(message, dbConnectionA, callback)
+function insertAlert(message, callback)
 {
     console.log(notice("NEW ALERT DETECTED!"));
     console.log(notice("ALERT MESSAGE FOLLOWS:"));
@@ -953,22 +839,14 @@ function insertAlert(message, dbConnectionA, callback)
         return false;
     }
 
-    dbConnectionA.query("SELECT * FROM ws_results WHERE ResultStartTime = "+message.start_time+" AND ResultServer="+world, function(err, result)
-    {
-        if (err)
-        {
-            throw(err);
-        }
-
-        if (result[0] !== undefined)
-        {
+    dbQuery("SELECT * FROM ws_results WHERE ResultStartTime = "+message.start_time+" AND ResultServer="+world, function(result) {
+        if (result[0] !== undefined) {
             console.log(critical("ATTEMPTED TO ADD AN EXISTING ALERT!"));
             reportError("Attempted to insert alert when already exists! World: "+world+" - Zone: "+zone, "Insert Alert");
             return;
         }
 
-        if (message.start_time) // If a valid alert message
-        {
+        if (message.start_time) { // If a valid alert message
             var now = new Date().getTime();
             var moment = require('moment-timezone');
             var timezone = 'UTC';
@@ -1009,10 +887,7 @@ function insertAlert(message, dbConnectionA, callback)
                 timeBracket = 'MOR';
             }
 
-            console.log(timeBracket);
-
-            var startAlert =
-            {
+            var startAlert = {
                 instanceID: message.instance_id,
                 ResultStartTime: message.start_time,
                 ResultServer: world,
@@ -1024,123 +899,88 @@ function insertAlert(message, dbConnectionA, callback)
 
             console.log("================ INSERTING INITIAL RECORD ================");
 
-            dbConnectionA.query('INSERT INTO ws_results SET ?', startAlert, function(err, result)
-            {
-                if (err)
-                {
-                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                    {
-                        console.log(message);
-                        reportError(err, "Insert Capture Record - Duplicate / Deadlock");
-                    }
-                    else
-                    {
-                        console.log(critical("INVALID / DUPLICATED ALERT RECORD DETECTED! Skipping!"));
-                        reportError("Duplicate Alert, World: "+world+" - ZONE: "+zone, message);
-                    }
-                }
-                else
-                {
-                    var resultID = result.insertId;
-                    var ends = calcEndTime(message.start_time, message.metagame_event_type_id);
+            dbQueryParameter('INSERT INTO ws_results SET ?', startAlert, function(result) {
+                var resultID = result.insertId;
+                var ends = calcEndTime(message.start_time, message.metagame_event_type_id);
 
-                    var monitorPost =
-                    {
-                        instanceID: message.instance_id,
-                        world: world,
-                        zone: zone,
+                console.log('INSERT INSTANCE END TIME:', ends);
+
+                var monitorPost = {
+                    instanceID: message.instance_id,
+                    world: world,
+                    zone: zone,
+                    resultID: resultID,
+                    started: message.start_time,
+                    endtime: ends,
+                    type: alertType
+                };
+
+                insertInitialMapData(monitorPost, function() {
+                    console.log(success("Fired initial map script"));
+                });
+
+                var toSend = {
+                    startTime: message.start_time,
+                    endTime: ends,
+                    world: world,
+                    zone: zone,
+                    resultID: resultID,
+                    controlVS: message.control_vs,
+                    controlNC: message.control_nc,
+                    controlTR: message.control_tr,
+                    metagameEventID: alertType
+                };
+
+                toSend.remaining = (parseInt(toSend.endTime) - parseInt(toSend.startTime));
+
+                console.log(critical("Sending Websocket Message: "));
+                console.log(critical(JSON.stringify(toSend, null, 4)));
+
+                sendMonitor("alertStart", toSend);
+
+                dbQueryParameter('INSERT INTO ws_instances SET ?', monitorPost, function() {
+                    console.log(success("INSERT ws_instances RECORD FOR ALERT: #"+resultID+" SUCCESSFUL!"));
+
+                    var factionArray = {
                         resultID: resultID,
-                        started: message.start_time,
-                        endtime: ends,
-                        type: alertType
+                        killsVS: 0,
+                        killsNC: 0,
+                        killsTR: 0,
+                        deathsVS: 0,
+                        deathsNC: 0,
+                        deathsTR: 0,
+                        teamKillsVS: 0,
+                        teamKillsNC: 0,
+                        teamKillsTR: 0,
+                        suicidesVS: 0,
+                        suicidesNC: 0,
+                        suicidesTR: 0,
+                        headshotsVS: 0,
+                        headshotsNC: 0,
+                        headshotsTR: 0,
+                        totalKills: 0,
+                        totalDeaths: 0,
+                        totalTKs: 0,
+                        totalSuicides: 0,
+                        totalHeadshots: 0
                     };
 
-                    insertInitialMapData(monitorPost, function()
-                    {
-                        console.log(success("Fired initial map script"));
+                    dbQueryParameter('INSERT INTO ws_factions SET ?', factionArray, function() {
+                        console.log(success("INSERT ws_factions RECORD FOR ALERT: #"+resultID+" SUCCESSFUL!"));
+
+                        console.log(success("INSERT OF ALERT: #"+resultID+" SUCCESSFUL!"));
+                        console.log(success("====================================================="));
+                        callback();
                     });
-
-                    var toSend =
-                    {
-                        startTime: message.start_time,
-                        endTime: ends,
-                        world: world,
-                        zone: zone,
-                        resultID: resultID,
-                        controlVS: message.control_vs,
-                        controlNC: message.control_nc,
-                        controlTR: message.control_tr,
-                        metagameEventID: alertType
-                    };
-
-                    toSend.remaining = (parseInt(toSend.endTime) - parseInt(toSend.startTime));
-
-                    console.log(critical("Sending Websocket Message: "));
-                    console.log(critical(JSON.stringify(toSend, null, 4)));
-
-                    sendMonitor("alertStart", toSend);
-
-                    dbConnectionA.query('INSERT INTO ws_instances SET ?', monitorPost, function(err)
-                    {
-                        if (err)
-                        {
-                            reportError(err, "Insert Instances");
-                        }
-                        else
-                        {
-                            console.log(success("INITIAL INSERT OF ALERT: #"+resultID+" SUCCESSFUL!"));
-                            console.log(success("====================================================="));
-
-                            var factionArray =
-                            {
-                                resultID: resultID,
-                                killsVS: 0,
-                                killsNC: 0,
-                                killsTR: 0,
-                                deathsVS: 0,
-                                deathsNC: 0,
-                                deathsTR: 0,
-                                teamKillsVS: 0,
-                                teamKillsNC: 0,
-                                teamKillsTR: 0,
-                                suicidesVS: 0,
-                                suicidesNC: 0,
-                                suicidesTR: 0,
-                                headshotsVS: 0,
-                                headshotsNC: 0,
-                                headshotsTR: 0,
-                                totalKills: 0,
-                                totalDeaths: 0,
-                                totalTKs: 0,
-                                totalSuicides: 0,
-                                totalHeadshots: 0
-                            };
-
-                            dbConnectionA.query('INSERT INTO ws_factions SET ?', factionArray, function(err)
-                            {
-                                if (err)
-                                {
-                                    reportError(err, "Insert Factions Record");
-                                }
-                                else
-                                {
-                                    fireSubscriptions(message, resultID, "subscribe");
-                                    callback(resultID);
-                                }
-                            });
-                        }
-                    });
-                }
+                });
             });
-        }
-        else
-        {
+        } else {
             console.log(critical("INVALID START TIME RECEIVED, SKIPPING!"));
         }
     });
 }
 
-function endAlert(message, resultID, dbConnectionA, callback)
+function endAlert(message, resultID, callback)
 {
     console.log(message);
     var world = message.world_id;
@@ -1148,155 +988,111 @@ function endAlert(message, resultID, dbConnectionA, callback)
 
     console.log('================ ENDING ALERT #'+resultID+' - World: '+world+' - Zone: '+zone+' ================');
 
-    if (resultID)
-    {
+    if (resultID) {
         var date = new Date();
 
         var datetime = DateCalc(date);
 
-        if ((!message.end_time) || (message.end_time == "0"))  // If time is empty, use the current datetime as a backup
-        {
+        if (!message.end_time || message.end_time == "0") { // If time is empty, use the current datetime as a backup
             var newDate = new Date().getTime();
             message.end_time = parseInt(newDate / 1000);
         }
 
         /* Alert Processing */
 
-        dbConnectionA.query("SELECT * FROM ws_map WHERE resultID="+resultID+" ORDER BY timestamp DESC LIMIT 1", function(err, Lresult)
-        {
-            if (err)
-            {
-                throw(err);
-            }
-            else
-            {
-                dbConnectionA.query("SELECT * FROM ws_map WHERE resultID="+resultID+" ORDER BY timestamp ASC LIMIT 1", function(err, Fresult)
-                {
-                    if (err)
-                    {
-                        throw(err);
+        dbQuery("SELECT * FROM ws_map WHERE resultID="+resultID+" ORDER BY timestamp DESC LIMIT 1", function(Lresult) {
+            dbQuery("SELECT * FROM ws_map WHERE resultID="+resultID+" ORDER BY timestamp ASC LIMIT 1", function(Fresult) {
+                if (!Fresult[0] && !Lresult[0]) {
+                    reportError("MISSING CAPTURE LOGS. UNABLE TO CALCULATE END OF ALERT #" + resultID, "End Alert");
+
+                    console.log(critical("Marking Alert as Invalid"));
+
+                    dbQuery('UPDATE ws_results SET Valid = 0, InProgress = 0 WHERE ResultID = ' + resultID, function () {
+                        dbQuery('DELETE FROM ws_instances WHERE resultID = ' + resultID, function () {
+                            delete populationInstances[resultID];
+                            delete instances[resultID];
+                            return false;
+                        });
+                    });
+                }
+
+                // If results have been pulled
+                calcWinners(message, resultID, Lresult, function(winner, draw, domination) {
+                    if (!winner) {
+                        console.log(critical("UNABLE TO CALCULATE WINNER!"));
+                        console.log("RESULT ID: "+resultID);
+                        reportError("UNABLE TO CALCULATE WINNER: "+resultID, message, true);
+                        return false;
                     }
 
-                    if ((Fresult[0]) && (Lresult[0])) // If results have been pulled
-                    {
-                        calcWinners(message, resultID, Lresult, dbConnectionA, function(winner, draw, domination)
-                        {
-                            if (winner) // If the winner was actually calculated
-                            {
-                                console.log(success("WINNER IS: "+winner));
+                    console.log(success("WINNER IS: "+winner));
 
-                                dbConnectionA.query('UPDATE ws_results SET ResultDateTime="'+datetime+'", InProgress="0", Valid="1", ResultEndTime="'+message.end_time+'", ResultWinner="'+winner+'", ResultDomination="'+domination+'", ResultDraw="'+draw+'" WHERE ResultID='+resultID, function(err, result)
-                                {
-                                    console.log("UPDATING RESULT RECORD #"+resultID);
+                    console.log("UPDATING RESULT RECORD #"+resultID);
 
-                                    if (err)
-                                    {
-                                        reportError(err, "End Result (Update)");
-                                        throw(err);
-                                    }
-                                    else if (result.affectedRows === 0) // if it failed
-                                    {
-                                        throw("UPDATING ALERT RECORD FAILED! #"+resultID);
-                                    }
-                                    else
-                                    {
-                                        console.log(success("RECORD UPDATED"));
-                                        console.log("DELETING INSTANCE RECORD #"+resultID);
+                    dbQuery('UPDATE ws_results SET ResultDateTime="'+datetime+'", InProgress="0", Valid="1", ResultEndTime="'+message.end_time+'", ResultWinner="'+winner+'", ResultDomination="'+domination+'", ResultDraw="'+draw+'" WHERE ResultID='+resultID, function(result) {
 
-                                        dbConnectionA.query('DELETE FROM ws_instances WHERE resultID='+resultID, function(err)
-                                        {
-                                            if (err)
-                                            {
-                                                reportError(err, "Delete Instance");
-                                                throw(err);
-                                            }
-                                            else
-                                            {
-                                                console.log(success("INSTANCE DATABASE RECORD SUCCESSFULLY DELETED"));
+                        if (result.affectedRows === 0) { // if it failed
+                            reportError("UPDATING ALERT RECORD FAILED! #"+resultID, 'endAlert - Update Result', true)
+                        }
 
-                                                if (instances[resultID] !== undefined)
-                                                {
-                                                    var toSend =
-                                                    {
-                                                        resultID: resultID,
-                                                        endTime: message.end_time,
-                                                        winner: winner,
-                                                        controlVS: instances[resultID].controlVS,
-                                                        controlNC: instances[resultID].controlNC,
-                                                        controlTR: instances[resultID].controlTR,
-                                                        domination: domination,
-                                                        world: world,
-                                                        zone: zone
-                                                    };
-                                                    console.log(notice("Websocket Message: "));
-                                                    console.log(notice(JSON.stringify(toSend, null, 4)));
+                        console.log(success("RECORD UPDATED"));
+                        console.log("DELETING INSTANCE RECORD #"+resultID);
 
-                                                    sendMonitor("alertEnd", toSend);
-                                                    sendResult("alertEnd", toSend, resultID);
-
-                                                    //fireSubscriptions(message, resultID, "unsubscribe");
-                                                    triggerLeaderboardUpdate(world);
-                                                }
-                                                else
-                                                {
-                                                    reportError("INSTANCE COULD NOT BE DETECTED FOR ENDING ALERT: "+resultID, "End Alert");
-                                                }
-
-                                                delete populationInstances[resultID];
-                                                delete instances[resultID];
-
-                                                callback(resultID);
-                                            }
-                                        });
-                                    }
-                                });
+                        dbQuery('DELETE FROM ws_instances WHERE resultID='+resultID, function(result) {
+                            if (result.affectedRows === 0) { // if it failed
+                                reportError("DELETING ALERT INSTANCE RECORD RECORD FAILED! #"+resultID, 'endAlert - Delete Instance', true);
                             }
-                            else
-                            {
-                                console.log(critical("UNABLE TO CALCULATE WINNER!"));
-                                console.log("RESULT ID: "+resultID);
-                                reportError("UNABLE TO CALCULATE WINNER: "+resultID, message);
-                                resetScript();
-                                return false;
+                            console.log(success("INSTANCE DATABASE RECORD SUCCESSFULLY DELETED"));
+
+                            if (instances[resultID] !== undefined) {
+                                var toSend = {
+                                    resultID: resultID,
+                                    endTime: message.end_time,
+                                    winner: winner,
+                                    controlVS: instances[resultID].controlVS,
+                                    controlNC: instances[resultID].controlNC,
+                                    controlTR: instances[resultID].controlTR,
+                                    domination: domination,
+                                    world: world,
+                                    zone: zone
+                                };
+                                console.log(notice("Sending end of alert websocket message: "));
+                                console.log(notice(JSON.stringify(toSend, null, 4)));
+
+                                sendMonitor("alertEnd", toSend);
+                                sendResult("alertEnd", toSend, resultID);
+
+                                //fireSubscriptions(message, resultID, "unsubscribe");
+                                triggerLeaderboardUpdate(world);
+                            } else {
+                                reportError("INSTANCE COULD NOT BE DETECTED FOR ENDING ALERT: "+resultID, "End Alert");
                             }
+
+                            delete populationInstances[resultID];
+                            delete instances[resultID];
+
+                            callback(resultID);
                         });
-                    } else {
-                        reportError("MISSING CAPTURE LOGS. UNABLE TO CALCULATE END OF ALERT #"+resultID, "End Alert");
-
-                        console.log(critical("Marking Alert as Invalid"));
-
-                        dbConnectionA.query('UPDATE ws_results SET Valid = 0, InProgress = 0 WHERE ResultID = '+resultID, function(err) {
-                            if (err) { throw (err); }
-
-                            dbConnectionA.query('DELETE FROM ws_instances WHERE resultID = '+resultID, function(err) {
-                                if (err) { throw (err); }
-
-                                delete populationInstances[resultID];
-                                delete instances[resultID];
-                                return false;
-                            });
-                        });
-                    }
+                    });
                 });
-            }
+            });
         });
     } else {
         reportError("RESULT ID WAS NOT PASSED TO END ALERT SCRIPT", "End Alert");
     }
 }
 
-function updateMapData(message, resultID, dbConnectionMap, callback)
+function updateMapData(message, resultID, callback)
 {
-    if (message.facility_id && message.is_block_update === "0") // If Valid
-    {
+    if (message.facility_id && message.is_block_update === "0") { // If Valid
         if (config.debug.facility === true) {
             console.log(notice(JSON.stringify(message, null, 4)));
         }
 
         var defence = 0;
+        var isCapture = parseInt(message.is_capture);
 
-        if (message.is_capture === "0")
-        {
+        if (isCapture === 0) {
             defence = 1;
             console.log("DEFENCE!");
         }
@@ -1304,8 +1100,7 @@ function updateMapData(message, resultID, dbConnectionMap, callback)
         console.log('================ UPDATING ALERT MAP #'+resultID+' ================');
 
         //console.log(notice("INSERT 0"));
-        var post =
-        {
+        var post = {
             resultID: resultID,
             timestamp: message.timestamp,
             facilityID: message.facility_id,
@@ -1324,72 +1119,47 @@ function updateMapData(message, resultID, dbConnectionMap, callback)
         sendResult("facility", post, resultID);
         sendMonitor("update", post);
 
-        dbConnectionMap.query('INSERT INTO ws_map SET ?', post, function(err)
-        {
-            if (err)
-            {
-                if (err.errno !== 1062) // If not a duplicate
-                {
-                    console.log(message);
-                    reportError(err, "Insert Capture Record");
-                    throw(err);
-                }
-
-                console.log(warning("DUPLICATE MAP RECORD DETECTED, SKIPPING ENTRY!"));
-            }
-            else
-            {
-                if (instances[resultID] !== undefined)
-                {
-                    instances[resultID].controlVS = message.control_vs;
-                    instances[resultID].controlNC = message.control_nc;
-                    instances[resultID].controlTR = message.control_tr;
-
-                    if (defence === 0)
-                    {
-                        var instancesPost =
-                        {
-                            controlVS: message.control_vs,
-                            controlNC: message.control_nc,
-                            controlTR: message.control_tr
-                        };
-
-                        dbConnectionMap.query("UPDATE ws_instances SET ? WHERE resultID = "+resultID, instancesPost, function(err)
-                        {
-                            if (err)
-                            {
-                                throw(err);
-                            }
-                        });
-
-                        if (message.outfit_id > 0) {
-
-                            dbConnectionMap.query("UPDATE ws_outfits_total SET outfitCaptures=outfitCaptures+1 WHERE outfitID = '"+message.outfit_id+"'", function(err)
-                            {
-                                if (err)
-                                {
-                                    throw(err);
-                                }
-                            });
-                        }
-
-                    }
-
-                    console.log(success("FACILITY / TERRITORY RECORD INSERTED FOR WORLD: "+supplementalConfig.worlds[message.world_id]+" - ZONE: "+message.zone_id));
-                    console.log(notice("New Control Percentages: ")+"VS: "+message.control_vs+"% - NC: "+message.control_nc+"% - TR: "+message.control_tr+"%");
-                }
-                else
-                {
-                    reportError("MISSING INSTANCE FOR MAP UPDATE!!!", "Update Map");
-                }
-
+        dbQueryParameter('INSERT INTO ws_map SET ?', post, function() {
+            if (instances[resultID] === undefined) {
+                reportError("MISSING INSTANCE FOR MAP UPDATE!!!", "Update Map");
                 callback();
             }
+
+            instances[resultID].controlVS = message.control_vs;
+            instances[resultID].controlNC = message.control_nc;
+            instances[resultID].controlTR = message.control_tr;
+
+            if (defence === 0) {
+                var instancesPost = {
+                    controlVS: message.control_vs,
+                    controlNC: message.control_nc,
+                    controlTR: message.control_tr
+                };
+
+                dbQueryParameter("UPDATE ws_instances SET ? WHERE resultID = "+resultID, instancesPost, function(result) {
+                    if (result.affectedRows === 0) {
+                        reportError('Instance didn\'t get updated. Result #' + resultID);
+                    }
+                });
+
+                if (message.outfit_id > 0) {
+                    dbQuery("UPDATE ws_outfits_total SET outfitCaptures=outfitCaptures+1 WHERE outfitID = '"+message.outfit_id+"'", function(result) {
+                        if (result.affectedRows === 0) {
+                            reportError('ws_outfits_total outfit captures didn\'t get updated. Result #' + resultID);
+                        }
+                    });
+                }
+            }
+
+            console.log(success("FACILITY / TERRITORY RECORD INSERTED FOR WORLD: "+supplementalConfig.worlds[message.world_id]+" - ZONE: "+message.zone_id));
+            console.log(notice("New Control Percentages: ")+"VS: "+message.control_vs+"% - NC: "+message.control_nc+"% - TR: "+message.control_tr+"%");
+
+            callback();
         });
     }
 }
 
-function combatParse(message, resultID, dbConnectionCache, callback)
+function combatParse(message, resultID, callback)
 {
     var killerID        = message.attacker_character_id;
     var victimID        = message.victim_character_id;
@@ -1406,91 +1176,72 @@ function combatParse(message, resultID, dbConnectionCache, callback)
     messagesRecieved++;
     messagesRecievedSec++;
 
-    if (attackerFaction === victimFaction) // If a TK
-    {
+    if (attackerFaction === victimFaction) { // If a TK
         teamKill = 1;
     }
 
-    if (killerID === victimID)
-    {
+    if (killerID === victimID) {
         suicide = 1;
         teamKill = 0;
     }
 
-    if (config.debug.combat === true)
-    {
+    if (config.debug.combat === true) {
         console.log('================ INSERTING COMBAT RECORD ================');
     }
 
     // ATTEMPT TO GET CHARACTER NAME IF MISSING
 
-    checkPlayerCache(killerID, message.world_id, dbConnectionCache, function(killerName, killerBR)
-    {
-        if (config.debug.combat === true)
-        {
+    checkPlayerCache(killerID, message.world_id, function(killerName, killerBR) {
+        if (config.debug.combat === true) {
             console.log("GOT NAME: "+killerName);
         }
 
-        if (killerName === false)
-        {
+        if (killerName === false) {
             killerName = message.attacker_character_name;
         }
 
-        checkPlayerCache(victimID, message.world_id, dbConnectionCache, function(victimName, victimBR)
-        {
-            if (config.debug.combat === true)
-            {
+        checkPlayerCache(victimID, message.world_id, function(victimName, victimBR) {
+            if (config.debug.combat === true) {
                 console.log("GOT NAME: "+victimName);
             }
 
-            if (victimName === false)
-            {
+            if (victimName === false) {
                 victimName = message.victim_character_name;
             }
 
-            if (!killerName || !victimName)
-            {
+            if (!killerName || !victimName) {
                 console.log(notice("Missing player names for combat event. Cancelling operations."));
             }
 
-            if (killerOutfit === "0")
-            {
-                if (attackerFaction === 1)
-                {
+            if (killerOutfit === "0") {
+                if (attackerFaction === 1) {
                     killerOutfit = "-1";
                 }
 
-                if (attackerFaction === 2)
-                {
+                if (attackerFaction === 2) {
                     killerOutfit = "-2";
                 }
 
-                if (attackerFaction === 3)
-                {
+                if (attackerFaction === 3) {
                     killerOutfit = "-3";
                 }
             }
 
-            if (victimOutfit === "0")
-            {
-                if (victimFaction === 1)
-                {
+            if (victimOutfit === "0") {
+                if (victimFaction === 1) {
                     victimOutfit = "-1";
                 }
 
-                if (victimFaction === 2)
-                {
+                if (victimFaction === 2) {
                     victimOutfit = "-2";
                 }
 
-                if (victimFaction === 3)
-                {
+                if (victimFaction === 3) {
                     victimOutfit = "-3";
                 }
             }
 
-            var combatArray =
-            {
+            var combatArray = {
                 timestamp: message.timestamp,
                 resultID: parseInt(resultID),
                 attackerID: killerID,
@@ -1514,28 +1265,23 @@ function combatParse(message, resultID, dbConnectionCache, callback)
                 suicide: suicide
             };
 
-            if (config.debug.combat === true)
-            {
+            if (config.debug.combat === true) {
                 console.log(critical("===== ORIGINAL MESSAGE: ======="));
                 console.log(critical(JSON.stringify(message, null, 4)));
                 console.log("Combat Object Built");
                 console.log(warning(JSON.stringify(combatArray, null, 4)));
             }
 
-            checkOutfitCache(killerOutfit, worldID, dbConnectionCache, function(aoutfitName, aoutfitTag, aoutfitFaction, aoutfitID)
-            {
+            checkOutfitCache(killerOutfit, worldID, function(aoutfitName, aoutfitTag, aoutfitFaction, aoutfitID) {
                 combatArray.aOutfit = {};
 
-                if (aoutfitName !== undefined) // If returned
-                {
+                if (aoutfitName !== undefined) { // If returned
                     combatArray.aOutfit = {};
                     combatArray.aOutfit.id = aoutfitID;
                     combatArray.aOutfit.name = aoutfitName;
                     combatArray.aOutfit.tag = aoutfitTag;
                     combatArray.aOutfit.faction = aoutfitFaction;
-                }
-                else
-                {
+                } else {
                     combatArray.aOutfit = {};
                     combatArray.aOutfit.id = "0";
                     combatArray.aOutfit.name = "No Outfit";
@@ -1543,23 +1289,19 @@ function combatParse(message, resultID, dbConnectionCache, callback)
                     combatArray.aOutfit.faction = "0";
                 }
 
-                if (config.debug.combat === true)
-                {
+                if (config.debug.combat === true) {
                     console.log("Attacker Outfit Object Built");
                 }
 
-                checkOutfitCache(victimOutfit, worldID, dbConnectionCache, function(voutfitName, voutfitTag, voutfitFaction, voutfitID)
-                {
-                    if (voutfitName !== undefined) // If returned
-                    {
+                checkOutfitCache(victimOutfit, worldID, function(voutfitName, voutfitTag, voutfitFaction, voutfitID) {
+                    if (voutfitName !== undefined) { // If returned
                         combatArray.vOutfit = {};
                         combatArray.vOutfit.id = voutfitID;
                         combatArray.vOutfit.name = voutfitName;
                         combatArray.vOutfit.tag = voutfitTag;
                         combatArray.vOutfit.faction = voutfitFaction;
                     }
-                    else
-                    {
+                    else {
                         combatArray.vOutfit = {};
                         combatArray.vOutfit.id = "0";
                         combatArray.vOutfit.name = "No Outfit";
@@ -1571,10 +1313,8 @@ function combatParse(message, resultID, dbConnectionCache, callback)
                     sendResult("combat", combatArray, resultID);
                     sendWorld('Combat', JSON.stringify(combatArray), combatArray.worldID);
 
-                    insertCombatRecord(message, resultID, combatArray, function()
-                    {
-                        if(config.debug.combat === true)
-                        {
+                    insertCombatRecord(message, resultID, combatArray, function() {
+                        if (config.debug.combat === true) {
                             console.log("INSERTED COMBAT RECORD");
                         }
 
@@ -1590,183 +1330,94 @@ function combatParse(message, resultID, dbConnectionCache, callback)
 
 function insertCombatRecord(message, resultID, combatArray, callback)
 {
-    if(resultID) // Make sure result ID is valid first
-    {
-        pool.getConnection(function(poolErr, dbConnectionW)
-        {
-            if (poolErr)
-            {
-                throw(poolErr);
-            }
-
-            insertWeaponStats(message, resultID, combatArray, dbConnectionW);
-            dbConnectionW.release();
-        });
-
+    if (resultID) { // Make sure result ID is valid first
+        insertWeaponStats(message, resultID, combatArray);
         insertOutfitStats(resultID, combatArray);
-
-        pool.getConnection(function(poolErr, dbConnectionP)
-        {
-            if (poolErr)
-            {
-                throw(poolErr);
-            }
-
-            insertPlayerStats(resultID, combatArray, dbConnectionP, function() {
-                dbConnectionP.release();
-            });
-        });
-
+        insertPlayerStats(resultID, combatArray);
         updateFactionStats(resultID, combatArray);
 
-        if (config.toggles.classStats === true)
-        {
+        if (config.toggles.classStats === true) {
             insertClassStats(resultID, combatArray);
         }
 
-        if (config.debug.combat === true)
-        {
+        if (config.debug.combat === true) {
             console.log(success("PROCESSED KILL FOR PLAYER: "+message.attacker_character_name+" - "+supplementalConfig.worlds[message.world_id]));
             console.log(notice("Player used weapon: "+message.weapon_id));
         }
 
         callback();
-    }
-    else
-    {
+    } else {
         console.log(critical("NO VALID RESULT ID FOUND! - insertCombatRecord"));
     }
 }
 
-function insertWeaponStats(message, resultID, combatArray, dbConnectionW)
+function insertWeaponStats(message, resultID, combatArray)
 {
     var kill = 'killCount=killCount+1';
     var headshot = '';
     var teamkill = '';
 
-    if (combatArray.teamkill === "1")
-    {
+    if (combatArray.teamkill === "1") {
         kill = '';
         teamkill = 'teamkills=teamkills+1';
     }
 
-    if (combatArray.headshot === "1")
-    {
+    if (combatArray.headshot === "1") {
         headshot = ', headshots=headshots+1';
     }
 
     var updateWeaponTotalsQuery = 'UPDATE ws_weapons_totals SET '+kill+teamkill+headshot+' WHERE weaponID="'+message.weapon_id+'" AND resultID='+resultID;
     var updateWeaponPlayerQuery = 'UPDATE ws_weapons SET '+kill+teamkill+headshot+' WHERE weaponID="'+message.weapon_id+'" AND playerID="'+message.attacker_character_id+'" AND resultID='+resultID;
 
-    dbConnectionW.query(updateWeaponTotalsQuery, function(err, result)
-    {
-        if (err)
-        {
-            reportError(err, "Update Weapon Stats Totals");
-            console.log(message.weapon_id);
-            console.log(resultID);
-            console.log(critical(updateWeaponTotalsQuery));
-            throw(err);
+    dbQuery(updateWeaponTotalsQuery, function(result) {
+        var numTRows = result.affectedRows;
+
+        var killInt = 1;
+
+        if (combatArray.teamkill === 1) {
+            killInt = 0;
         }
-        else
-        {
-            var numTRows = result.affectedRows;
 
-            var killInt = 1;
+        if (numTRows === 0) {
+            var weaponTArray = {
+                resultID: resultID,
+                weaponID: message.weapon_id,
+                killCount: killInt,
+                headshots: combatArray.headshot,
+                teamkills: combatArray.teamkill
+            };
 
-            if (combatArray.teamkill === 1) {
-                killInt = 0;
-            }
+            dbQueryParameter('INSERT INTO ws_weapons_totals SET ?', weaponTArray, function() {
+                if (config.debug.weapons === true) {
+                    console.log('Inserted new record into ws_weapons_totals');
+                }
+            });
+        }
 
-            if (numTRows === 0)
-            {
-                var weaponTArray = {
+        dbQuery(updateWeaponPlayerQuery, function(result) {
+            var numRows = result.affectedRows;
+
+            if (numRows === 0) { // If new record
+                var weaponArray = {
                     resultID: resultID,
+                    playerID: message.attacker_character_id,
                     weaponID: message.weapon_id,
                     killCount: killInt,
                     headshots: combatArray.headshot,
                     teamkills: combatArray.teamkill
                 };
 
-                dbConnectionW.query('INSERT INTO ws_weapons_totals SET ?', weaponTArray, function(err)
-                {
-                    if (err)
-                    {
-                        if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                        {
-                            reportError(err, "Insert Weapon Stats Totals - Deadlock");
-                            console.log(weaponTArray);
-                        }
-                        else if (err.errno === 1062) // If a duplicate
-                        {
-                            if (config.debug.databaseWarnings === true)
-                            {
-                                console.log(warning("DUPLICATE WEAPON TOTAL STAT DETECTED - " + message.weapon_id + " #"+ resultID));
-                                console.log(warning(err));
-                            }
+                if (config.debug.weapons === true) {
+                    console.log(weaponArray);
+                }
 
-                            handleDeadlock(updateWeaponTotalsQuery, "Weapons Totals", 0);
-                        }
+                dbQueryParameter('INSERT INTO ws_weapons SET ?', weaponArray, function() {
+                    if (config.debug.weapons === true) {
+                        console.log('Inserted new record into ws_weapons');
                     }
                 });
             }
-
-            dbConnectionW.query(updateWeaponPlayerQuery, function(err, result)
-            {
-                if (err)
-                {
-                    reportError(err, "Update Weapon Stats Killer");
-                    throw(err);
-                }
-                else
-                {
-                    var numRows = result.affectedRows;
-
-                    if (numRows === 0) // If new record
-                    {
-                        var weaponArray = {
-                            resultID: resultID,
-                            playerID: message.attacker_character_id,
-                            weaponID: message.weapon_id,
-                            killCount: killInt,
-                            headshots: combatArray.headshot,
-                            teamkills: combatArray.teamkill
-                        };
-
-                        if (config.debug.weapons === true)
-                        {
-                            console.log(weaponArray);
-                        }
-
-                        dbConnectionW.query('INSERT INTO ws_weapons SET ?', weaponArray, function(err)
-                        {
-                            if (err)
-                            {
-                                if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                                {
-                                    reportError(err, "Insert Weapon Stats");
-                                    console.log(weaponArray);
-                                }
-                                else
-                                {
-                                    if (config.debug.databaseWarnings === true)
-                                    {
-                                        console.log(warning(err));
-                                        console.log(warning("DUPLICATE WEAPON STAT DETECTED - Weapon: " +message.weapon_id + " - #"+resultID));
-                                    }
-
-                                    if (config.debug.databaseQuries === true) {
-                                        console.log(updateWeaponPlayerQuery);
-                                    }
-
-                                    handleDeadlock(updateWeaponPlayerQuery, "Weapons Insert", 0);
-                                }
-                            }
-                        });
-                    }
-                }
-            });
-        }
+        });
     });
 }
 
@@ -1776,15 +1427,12 @@ function insertOutfitStats(resultID, combatArray)
     var deathOutfit = combatArray.victimOutfit;
     var worldID = combatArray.worldID;
 
-    if (outfitTotalsUpdates[resultID] === undefined)
-    {
+    if (outfitTotalsUpdates[resultID] === undefined) {
         outfitTotalsUpdates[resultID] = {};
     }
 
-    if (outfitTotalsUpdates[resultID][killOutfit] === undefined)
-    {
-        outfitTotalsUpdates[resultID][killOutfit] =
-        {
+    if (outfitTotalsUpdates[resultID][killOutfit] === undefined) {
+        outfitTotalsUpdates[resultID][killOutfit] = {
             outfitKills: 0,
             outfitDeaths: 0,
             outfitTKs: 0,
@@ -1795,10 +1443,8 @@ function insertOutfitStats(resultID, combatArray)
             outfitFaction: combatArray.attackerFaction
         };
     }
-    if (outfitTotalsUpdates[resultID][deathOutfit] === undefined)
-    {
-        outfitTotalsUpdates[resultID][deathOutfit] =
-        {
+    if (outfitTotalsUpdates[resultID][deathOutfit] === undefined) {
+        outfitTotalsUpdates[resultID][deathOutfit] = {
             outfitKills: 0,
             outfitDeaths: 0,
             outfitTKs: 0,
@@ -1810,24 +1456,20 @@ function insertOutfitStats(resultID, combatArray)
         };
     }
 
-    if (combatArray.teamkill === 1) // TK
-    {
+    if (combatArray.teamkill === 1) { // TK
         outfitTotalsUpdates[resultID][killOutfit].outfitTKs++;
         outfitTotalsUpdates[resultID][deathOutfit].outfitDeaths++;
     }
-    else if (combatArray.suicide === 1) // If a suicide
-    {
+    else if (combatArray.suicide === 1) { // If a suicide
         outfitTotalsUpdates[resultID][deathOutfit].outfitDeaths++;
         outfitTotalsUpdates[resultID][deathOutfit].outfitSuicides++;
-    }
-    else // Normal kill
-    {
+    } else { // Normal kill
         outfitTotalsUpdates[resultID][killOutfit].outfitKills++;
         outfitTotalsUpdates[resultID][deathOutfit].outfitDeaths++;
     }
 }
 
-function insertPlayerStats(resultID, combatArray, dbConnectionP, callback)
+function insertPlayerStats(resultID, combatArray)
 {
     var attackerID = combatArray.attackerID;
     var victimID = combatArray.victimID;
@@ -1855,38 +1497,31 @@ function insertPlayerStats(resultID, combatArray, dbConnectionP, callback)
 
     var vDeathQuery = 'playerDeaths=playerDeaths+1';
 
-    if (combatArray.headshot === 1)
-    {
+    if (combatArray.headshot === 1) {
         aKillQuery = 'playerKills=playerKills+1, ';
         headshotQuery = 'headshots=headshots+1';
     }
 
-    if (combatArray.teamkill === 1) // If a TK
-    {
+    if (combatArray.teamkill === 1) {// If a TK
         aKillQuery = '';
         teamKill = 1;
         aTKQuery = 'playerTeamKills=playerTeamKills+1';
 
-        if (config.debug.combat === true)
-        {
+        if (config.debug.combat === true) {
             console.log("TEAM KILL - Player");
         }
 
-        if (combatArray.headshot === 1)
-        {
+        if (combatArray.headshot === 1) {
             headshotQuery = 'headshots=headshots+1, ';
         }
-    }
-    else if (combatArray.suicide === 1) // Is it a suicie?
-    {
+    } else if (combatArray.suicide === 1) { // Is it a suicide?
         aKillQuery = '';
         aDeathQuery = 'playerDeaths=playerDeaths+1, ';
         aSuicideQuery = 'playerSuicides=playerSuicides+1';
         vDeathQuery = '';
         suicide = 1;
 
-        if (config.debug.combat === true)
-        {
+        if (config.debug.combat === true) {
             console.log("SUICIDE - Player");
         }
     }
@@ -1894,229 +1529,135 @@ function insertPlayerStats(resultID, combatArray, dbConnectionP, callback)
     var playerKills = 1;
     var playerDeaths = 0;
 
-    if (teamKill === 1)
-    {
+    if (teamKill === 1) {
         playerKills = 0;
     }
 
-    if (suicide === 1)
-    {
+    if (suicide === 1) {
         playerDeaths = 1;
         playerKills = 0;
     }
 
-    var updateQuery = 'UPDATE ws_players SET playerBR = '+attackerBR+', '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'" AND resultID='+resultID;
+    var attackerQuery = 'UPDATE ws_players SET playerBR = '+attackerBR+', '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'" AND resultID='+resultID;
 
-    if (config.debug.combat === true)
-    {
-        console.log(critical(updateQuery));
+    if (config.debug.combat === true) {
+        console.log(critical(attackerQuery));
     }
 
-    dbConnectionP.query(updateQuery, function(err, resultA)
-    {
-        if (err)
-        {
-            console.log(critical(updateQuery));
-            reportError(err, "Update Player Kills");
-            throw(err);
-        }
-        else
-        {
-            if (resultA.affectedRows === 0) // If new record for Attacker
-            {
-                var playerArrayKills = {
-                    resultID: resultID,
-                    playerID: attackerID,
-                    playerName: attackerName,
-                    playerOutfit: attackerOutfit,
-                    playerFaction: attackerFID,
-                    playerKills: playerKills,
-                    playerDeaths: playerDeaths,
-                    playerTeamKills: teamKill,
-                    playerSuicides: suicide,
-                    playerBR: attackerBR,
-                    headshots: headshot
-                };
-                
-                dbConnectionP.query('INSERT INTO ws_players SET ?', playerArrayKills, function(err)
-                {
-                    if (err)
-                    {
-                        if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                        {
-                            reportError(err, "Insert Initial Player Kill Stats");
-                            console.log('Player Name:', attackerName);
-                        }
-                        else
-                        {
-                            if (config.debug.duplicates === true)
-                            {
-                                console.log(warning("DUPLICATED / DEADLOCK PLAYER DEATH RECORD DETECTED"));
-                                reportError(err, "Insert Players Attacker Duplicated");
-                            }
+    dbQuery(attackerQuery, function(resultAttacker) {
+        if (resultAttacker.affectedRows === 0) { // If new record for Attacker
+            var attackerData = {
+                resultID: resultID,
+                playerID: attackerID,
+                playerName: attackerName,
+                playerOutfit: attackerOutfit,
+                playerFaction: attackerFID,
+                playerKills: playerKills,
+                playerDeaths: playerDeaths,
+                playerTeamKills: teamKill,
+                playerSuicides: suicide,
+                playerBR: attackerBR,
+                headshots: headshot
+            };
 
-                            handleDeadlock(updateQuery, "Insert Attacker", 0);
-                        }
-                    }
-                });
-            }
-
-            var updateTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+attackerOutfit+'", playerServer = '+worldID+', playerFaction = '+attackerFID+', playerBR = '+attackerBR+', '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'"';
-
-            dbConnectionP.query(updateTotalQuery, function(err, resultB)
-            {
-                if(err)
-                {
-                    throw(err);
-                }
-
-                if (resultB.affectedRows === 0) // If new record for Attacker
-                {
-                    var playerArrayTotal = {
-                        playerID: attackerID,
-                        playerName: attackerName,
-                        playerOutfit: attackerOutfit,
-                        playerFaction: attackerFID,
-                        playerKills: playerKills,
-                        playerDeaths: playerDeaths,
-                        playerTeamKills: teamKill,
-                        playerSuicides: suicide,
-                        headshots: headshot,
-                        playerBR: attackerBR,
-                        playerServer: worldID
-                    };
-
-                    dbConnectionP.query('INSERT INTO ws_players_total SET ?', playerArrayTotal, function(err)
-                    {
-                        if(err)
-                        {
-                            if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                            {
-                                reportError(err, "Insert Initial Player Total Stats (Attacker)", 0);
-                                console.log('Player Name:', attackerName);
-                            }
-                            else
-                            {
-                                handleDeadlock(updateTotalQuery, "Insert Initial Player Total Stats (attacker)");
-                            }
-                        }
-                    });
+            dbQueryParameter('INSERT INTO ws_players SET ?', attackerData, function () {
+                if (config.debug.combat === true) {
+                    console.log(attackerData);
+                    console.log('Inserted new player record (attacker) for alert # ' + resultID);
                 }
             });
-
-            if (attackerID !== victimID) // Don't count them twice!
-            {
-                var victimUpdateQuery = 'UPDATE ws_players SET playerBR = '+victimBR+', '+vDeathQuery+' WHERE playerID="'+victimID+'" AND resultID='+resultID;
-
-                if (config.debug.combat === true)
-                {
-                    console.log(critical(victimUpdateQuery));
-                }
-
-                dbConnectionP.query(victimUpdateQuery, function(err, resultR)
-                {
-                    if (err)
-                    {
-                        reportError(err, "Update Player Deaths");
-                        throw(err);
-                    }
-                    else
-                    {
-                        // PROCESSING FOR IF UPDATES FAILED (aka NEW RECORD)
-
-                        if (resultR.affectedRows === 0) // If new record for Victim
-                        {
-                            var playerArrayDeaths = {
-                                resultID: resultID,
-                                playerID: victimID,
-                                playerOutfit: victimOutfit,
-                                playerName: victimName,
-                                playerFaction: victimFID,
-                                playerKills: 0,
-                                playerDeaths: 1,
-                                playerTeamKills: 0,
-                                playerSuicides: 0,
-                                playerBR: victimBR,
-                                headshots: 0
-                            };
-
-                            dbConnectionP.query('INSERT INTO ws_players SET ?', playerArrayDeaths, function(err)
-                            {
-                                if (err)
-                                {
-                                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                                    {
-                                        reportError(err, "Insert Initial Player Death Stats");
-                                        console.log('Player Name:', victimName);
-                                    }
-                                    else
-                                    {
-                                        if (config.debug.duplicates === true)
-                                        {
-                                            console.log(warning("DUPLICATED PLAYER DEATH RECORD DETECTED"));
-                                        }
-
-                                        handleDeadlock(victimUpdateQuery, "Insert Player Death", 0);
-                                    }
-                                }
-                            });
-                        }
-                    }
-                });
-
-                var victimTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+victimOutfit+'", playerServer = '+worldID+', playerFaction = '+victimFID+', playerBR = '+victimBR+', '+vDeathQuery+' WHERE playerID="'+victimID+'"';
-
-                dbConnectionP.query(victimTotalQuery, function(err, resultC)
-                {
-                    if(err)
-                    {
-                        throw(err);
-                    }
-
-                    if (resultC.affectedRows === 0) // If new record for Attacker
-                    {
-                        var playerArrayTotal = {
-                            playerID: victimID,
-                            playerName: victimName,
-                            playerOutfit: victimOutfit,
-                            playerFaction: attackerFID,
-                            playerKills: 0,
-                            playerDeaths: 1,
-                            playerTeamKills: 0,
-                            playerSuicides: 0,
-                            playerBR: victimBR,
-                            headshots: 0
-                        };
-
-                        dbConnectionP.query('INSERT INTO ws_players_total SET ?', playerArrayTotal, function(err)
-                        {
-                            if(err)
-                            {
-                                if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                                {
-                                    reportError(err, "Insert Initial Player Total Death Stats");
-                                    console.log('Player Name:', victimName);
-                                }
-                                else
-                                {
-                                    handleDeadlock(victimUpdateQuery, "Insert Initial Player Total Death Stats");
-                                }
-                            }
-                        });
-                    }
-                });
-            }
-            else
-            {
-                if (config.debug.combat === true)
-                {
-                    console.log("Attacker and Victim IDs are the same.");
-                }
-            }
         }
     });
 
-    callback();
+    var attackerTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+attackerOutfit+'", playerServer = '+worldID+', playerFaction = '+attackerFID+', playerBR = '+attackerBR+', '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'"';
+
+    dbQuery(attackerTotalQuery, function(resultAttackerTotal) {
+        if (resultAttackerTotal.affectedRows === 0) { // If new total record for Attacker
+            var attackerTotalData = {
+                playerID: attackerID,
+                playerName: attackerName,
+                playerOutfit: attackerOutfit,
+                playerFaction: attackerFID,
+                playerKills: playerKills,
+                playerDeaths: playerDeaths,
+                playerTeamKills: teamKill,
+                playerSuicides: suicide,
+                headshots: headshot,
+                playerBR: attackerBR,
+                playerServer: worldID
+            };
+
+            dbQueryParameter('INSERT INTO ws_players_total SET ?', attackerTotalData, function() {
+                if (config.debug.combat === true) {
+                    console.log(attackerTotalData);
+                    console.log('Inserted new player total record (attacker) for alert # ' + resultID);
+                }
+            });
+        }
+    });
+
+    if (attackerID === victimID) { // Don't count them twice!
+        if (config.debug.combat === true) {
+            console.log("Attacker and Victim IDs are the same.");
+        }
+    } else {
+        var victimQuery = 'UPDATE ws_players SET playerBR = '+victimBR+', '+vDeathQuery+' WHERE playerID="'+victimID+'" AND resultID='+resultID;
+
+        if (config.debug.combat === true) {
+            console.log(critical(victimQuery));
+        }
+
+        dbQuery(victimQuery, function(resultVictim) {
+            if (resultVictim.affectedRows === 0) { // If new record for Victim
+                var victimData = {
+                    resultID: resultID,
+                    playerID: victimID,
+                    playerOutfit: victimOutfit,
+                    playerName: victimName,
+                    playerFaction: victimFID,
+                    playerKills: 0,
+                    playerDeaths: 1,
+                    playerTeamKills: 0,
+                    playerSuicides: 0,
+                    playerBR: victimBR,
+                    headshots: 0
+                };
+
+                dbQueryParameter('INSERT INTO ws_players SET ?', victimData, function() {
+                    if (config.debug.combat === true) {
+                        console.log(victimData);
+                        console.log('Inserted new player record (death) for alert # ' + resultID);
+                    }
+                });
+            }
+        });
+
+        var victimTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+victimOutfit+'", playerServer = '+worldID+', playerFaction = '+victimFID+', playerBR = '+victimBR+', '+vDeathQuery+' WHERE playerID="'+victimID+'"';
+
+        dbQuery(victimTotalQuery, function(resultVictimTotal) {
+            if (resultVictimTotal.affectedRows === 0) { // If new total record for Victim
+                var victimTotalData = {
+                    playerID: victimID,
+                    playerName: victimName,
+                    playerOutfit: victimOutfit,
+                    playerFaction: attackerFID,
+                    playerKills: 0,
+                    playerDeaths: 1,
+                    playerTeamKills: 0,
+                    playerSuicides: 0,
+                    playerBR: victimBR,
+                    headshots: 0
+                };
+
+                dbQueryParameter('INSERT INTO ws_players_total SET ?', victimTotalData, function() {
+                    if (config.debug.combat === true) {
+                        console.log(victimTotalData);
+                        console.log('Inserted new player record (death) for alert # ' + resultID);
+                    }
+                });
+            }
+        });
+    }
 }
 
 var factionUpdates = {};
@@ -2125,367 +1666,216 @@ var outfitTotalsUpdates = {};
 var classTotalsUpdates = {};
 var classPlayerUpdates = {};
 
-setInterval(function()
-{
-    batchUpdateFactionStats(function()
-    {
+setInterval(function() {
+    batchUpdateFactionStats(function() {
     });
 
-    batchUpdateXpTotals(function()
-    {
+    batchUpdateXpTotals(function() {
     });
 
-    batchUpdateOutfitTotals(function()
-    {
+    batchUpdateOutfitTotals(function() {
     });
 
-    batchUpdateClassTotals(function()
-    {
+    batchUpdateClassTotals(function() {
     });
 }, 5000);
 
 function batchUpdateFactionStats(callback)
 {
-    pool.getConnection(function(poolErr, dbFactionUpdate)
-    {
-        if (poolErr)
-        {
-            throw(poolErr);
+    Object.keys(factionUpdates).forEach(function(key) {
+        var object = clone(factionUpdates[key]); // The result object
+        delete factionUpdates[key];
+
+        if (config.debug.batch === true) {
+            console.log(JSON.stringify(object, null, 4));
         }
 
-        Object.keys(factionUpdates).forEach(function(key)
-        {
-            var object = clone(factionUpdates[key]); // The result object
-            delete factionUpdates[key];
-
-            if (config.debug.batch === true)
-            {
-                console.log(JSON.stringify(object, null, 4));
+        dbQuery("UPDATE ws_factions SET killsVS=killsVS+"+object.killsVS+", killsNC=killsNC+"+object.killsNC+", killsTR=killsTR+"+object.killsTR+", deathsVS=deathsVS+"+object.deathsVS+", deathsNC=deathsNC+"+object.deathsNC+", deathsTR=deathsTR+"+object.deathsTR+", teamKillsVS=teamKillsVS+"+object.teamKillsVS+", teamKillsNC=teamKillsNC+"+object.teamKillsNC+", teamKillsTR=teamKillsTR+"+object.teamKillsTR+", suicidesVS=suicidesVS+"+object.suicidesVS+", suicidesNC=suicidesNC+"+object.suicidesNC+", suicidesTR=suicidesTR+"+object.suicidesTR+", headshotsVS=headshotsVS+"+object.headshotsVS+", headshotsNC=headshotsNC+"+object.headshotsNC+", headshotsTR=headshotsTR+"+object.headshotsTR+", totalKills=totalKills+"+object.totalKills+", totalDeaths=totalDeaths+"+object.totalDeaths+", totalTKs=totalTKs+"+object.totalTKs+", totalSuicides=totalSuicides+"+object.totalSuicides+", totalHeadshots=totalHeadshots+"+object.totalHeadshots+" WHERE resultID = "+key, function() {
+            if (config.debug.batch === true) {
+                console.log('Factions updated for alert #' + key);
             }
-
-            pool.query("UPDATE ws_factions SET killsVS=killsVS+"+object.killsVS+", killsNC=killsNC+"+object.killsNC+", killsTR=killsTR+"+object.killsTR+", deathsVS=deathsVS+"+object.deathsVS+", deathsNC=deathsNC+"+object.deathsNC+", deathsTR=deathsTR+"+object.deathsTR+", teamKillsVS=teamKillsVS+"+object.teamKillsVS+", teamKillsNC=teamKillsNC+"+object.teamKillsNC+", teamKillsTR=teamKillsTR+"+object.teamKillsTR+", suicidesVS=suicidesVS+"+object.suicidesVS+", suicidesNC=suicidesNC+"+object.suicidesNC+", suicidesTR=suicidesTR+"+object.suicidesTR+", headshotsVS=headshotsVS+"+object.headshotsVS+", headshotsNC=headshotsNC+"+object.headshotsNC+", headshotsTR=headshotsTR+"+object.headshotsTR+", totalKills=totalKills+"+object.totalKills+", totalDeaths=totalDeaths+"+object.totalDeaths+", totalTKs=totalTKs+"+object.totalTKs+", totalSuicides=totalSuicides+"+object.totalSuicides+", totalHeadshots=totalHeadshots+"+object.totalHeadshots+" WHERE resultID = "+key, function(err)
-            {
-                if (err)
-                {
-                    throw(err);
-                }
-            });
         });
-
-        if (config.debug.batch === true)
-        {
-            console.log(success("BATCH UPDATE FOR ALERTS COMPLETE"));
-        }
-
-        dbFactionUpdate.release();
-        callback();
     });
+
+    if (config.debug.batch === true) {
+        console.log(success("BATCH FACTION UPDATE FOR ALERTS COMPLETE"));
+    }
+
+    callback();
 }
 
 function batchUpdateXpTotals(callback)
 {
-    pool.getConnection(function(poolErr, dbXPUpdate)
-    {
-        if (poolErr)
-        {
-            throw(poolErr);
+    Object.keys(xpTotalsUpdates).forEach(function(xpType) {
+        var object = clone(xpTotalsUpdates);
+
+        var updateTotalsQuery = 'UPDATE ws_xp_totals SET occurances=occurances+'+object[xpType]+' WHERE type = '+xpType;
+
+        if (config.debug.batch === true) {
+            console.log(updateTotalsQuery);
         }
 
-        Object.keys(xpTotalsUpdates).forEach(function(xpType)
-        {
-            var object = clone(xpTotalsUpdates);
+        dbQuery(updateTotalsQuery, function(result) {
+            if (result.affectedRows === 0) { // If missing record
+                console.log(notice("INSERTING XP TOTALS RECORD"));
+                var xpArrayTotals = {
+                    type: xpType,
+                    occurances: 1
+                };
 
-            var updateTotalsQuery = 'UPDATE ws_xp_totals SET occurances=occurances+'+object[xpType]+' WHERE type = '+xpType;
-
-            if (config.debug.batch === true)
-            {
-                console.log(updateTotalsQuery);
+                dbQueryParameter('INSERT INTO ws_xp_totals SET ?', xpArrayTotals, function() {
+                    if (config.debug.batch === true) {
+                        console.log('Batch inserted into ws_xs_totals');
+                    }
+                });
             }
-
-            dbXPUpdate.query(updateTotalsQuery, function(err, result)
-            {
-                if (err)
-                {
-                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                    {
-                        handleDeadlock(updateTotalsQuery, "XP Update Totals", 0);
-                    }
-                    else if (err)
-                    {
-                        reportError(err, "Unable to update XP totals record");
-                        throw(err);
-                    }
-                }
-                else if (result.affectedRows === 0) // If missing record
-                {
-                    console.log(notice("INSERTING XP TOTALS RECORD"));
-                    var xpArrayTotals =
-                    {
-                        type: xpType,
-                        occurances: 1
-                    };
-
-                    dbXPUpdate.query('INSERT INTO ws_xp_totals SET ?', xpArrayTotals, function(err)
-                    {
-                        if (err)
-                        {
-                            if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                            {
-                                reportError(err, "Insert XP Stats record Totals (#"+resultID+")");
-                            }
-                            else
-                            {
-                                handleDeadlock(updateTotalsQuery, "XP Update", 0);
-                            }
-                        }
-                    });
-                }
-            });
         });
-
-        dbXPUpdate.release();
-        callback();
     });
+
+    if (config.debug.batch === true) {
+        console.log(success("BATCH XP UPDATE FOR ALERTS COMPLETE"));
+    }
+
+    callback();
 }
 
 function batchUpdateOutfitTotals(callback)
 {
-    pool.getConnection(function(poolErr, dbOutfitUpdate)
-    {
-        if (poolErr)
-        {
-            throw(poolErr);
-        }
+    Object.keys(outfitTotalsUpdates).forEach(function(resultID) {
+        Object.keys(outfitTotalsUpdates[resultID]).forEach(function(outfitID) {
+            var object = clone(outfitTotalsUpdates[resultID][outfitID]);
+            delete outfitTotalsUpdates[resultID][outfitID];
 
-        Object.keys(outfitTotalsUpdates).forEach(function(resultID)
-        {
-            Object.keys(outfitTotalsUpdates[resultID]).forEach(function(outfitID)
-            {
-                var object = clone(outfitTotalsUpdates[resultID][outfitID]);
-                delete outfitTotalsUpdates[resultID][outfitID];
+            var updateOutfitAlert = 'UPDATE ws_outfits SET outfitKills=outfitKills+'+object.outfitKills+', outfitDeaths=outfitDeaths+'+object.outfitDeaths+',outfitTKs=outfitTKs+'+object.outfitTKs+', outfitSuicides=outfitSuicides+'+object.outfitSuicides+' WHERE outfitID = "'+outfitID+'" AND resultID = '+resultID;
 
-                var updateOutfitAlert = 'UPDATE ws_outfits SET outfitKills=outfitKills+'+object.outfitKills+', outfitDeaths=outfitDeaths+'+object.outfitDeaths+',outfitTKs=outfitTKs+'+object.outfitTKs+', outfitSuicides=outfitSuicides+'+object.outfitSuicides+' WHERE outfitID = "'+outfitID+'" AND resultID = '+resultID;
+            dbQuery(updateOutfitAlert, function(resultA) {
+                if (resultA.affectedRows === 0) {
+                    var outfitArrayKills = {
+                        resultID: resultID,
+                        outfitID: outfitID,
+                        outfitName: object.outfitName,
+                        outfitTag: object.outfitTag,
+                        outfitFaction: object.outfitFaction,
+                        outfitKills: object.outfitKills,
+                        outfitDeaths: object.outfitDeaths,
+                        outfitSuicides: object.outfitSuicides,
+                        outfitTKs: object.outfitTKs
+                    };
 
-                var updateOutfitTotals = 'UPDATE ws_outfits_total SET outfitKills=outfitKills+'+object.outfitKills+', outfitDeaths=outfitDeaths+'+object.outfitDeaths+',outfitTKs=outfitTKs+'+object.outfitTKs+', outfitSuicides=outfitSuicides+'+object.outfitSuicides+' WHERE outfitID = "'+outfitID+'"';
-
-                dbOutfitUpdate.query(updateOutfitAlert, function(err, resultA)
-                {
-                    if (err)
-                    {
-                        reportError(err, "Update Outfit Kills");
-                        throw(err);
-                    }
-
-                    if (resultA.affectedRows === 0)
-                    {
-                        var outfitArrayKills = {
-                            resultID: resultID,
-                            outfitID: outfitID,
-                            outfitName: object.outfitName,
-                            outfitTag: object.outfitTag,
-                            outfitFaction: object.outfitFaction,
-                            outfitKills: object.outfitKills,
-                            outfitDeaths: object.outfitDeaths,
-                            outfitSuicides: object.outfitSuicides,
-                            outfitTKs: object.outfitTKs
-                        };
-
-                        dbOutfitUpdate.query('INSERT INTO ws_outfits SET ?', outfitArrayKills, function(err)
-                        {
-                            if (err)
-                            {
-                                if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                                {
-                                    console.log(notice(outfitArrayKills));
-                                    reportError(err, "Insert Outfit Stats Kills");
-                                }
-                                else
-                                {
-                                    handleDeadlock(updateOutfitAlert, "Insert outfit stats Kills MESG: "+ err);
-                                }
-                            }
-                        });
-                    }
-
-                    // OUTFIT TOTALS
-
-                    dbOutfitUpdate.query(updateOutfitTotals, function(err, resultB)
-                    {
-                        if(err)
-                        {
-                            throw(err);
-                        }
-
-                        if (resultB.affectedRows === 0) // If new record for Attacker
-                        {
-                            var outfitArrayKills = {
-                                outfitID: outfitID,
-                                outfitName: object.outfitName,
-                                outfitTag: object.outfitTag,
-                                outfitFaction: object.outfitFaction,
-                                outfitKills: object.outfitKills,
-                                outfitDeaths: object.outfitDeaths,
-                                outfitSuicides: object.outfitSuicides,
-                                outfitTKs: object.outfitTKs,
-                                outfitServer: object.world
-                            };
-
-                            dbOutfitUpdate.query('INSERT INTO ws_outfits_total SET ?', outfitArrayKills, function(err)
-                            {
-                                if(err)
-                                {
-                                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                                    {
-                                        reportError(err, "Insert Initial Outfit Total Stats (Attacker)");
-                                    }
-                                    else
-                                    {
-                                        handleDeadlock(updateOutfitTotals, "Insert initial outfit total stats (attacker)");
-                                    }
-                                }
-                            });
+                    dbQueryParameter('INSERT INTO ws_outfits SET ?', outfitArrayKills, function () {
+                        if (config.debug.batch === true) {
+                            console.log(success("Batch updated outfit totals for alert #" + resultID));
                         }
                     });
-                });
+                }
+            });
+
+            // OUTFIT TOTALS
+
+            var updateOutfitTotals = 'UPDATE ws_outfits_total SET outfitKills=outfitKills+'+object.outfitKills+', outfitDeaths=outfitDeaths+'+object.outfitDeaths+',outfitTKs=outfitTKs+'+object.outfitTKs+', outfitSuicides=outfitSuicides+'+object.outfitSuicides+' WHERE outfitID = "'+outfitID+'"';
+
+            dbQuery(updateOutfitTotals, function(resultB) {
+                if (resultB.affectedRows === 0) {// If new record for Attacker
+                    var outfitArrayKills = {
+                        outfitID: outfitID,
+                        outfitName: object.outfitName,
+                        outfitTag: object.outfitTag,
+                        outfitFaction: object.outfitFaction,
+                        outfitKills: object.outfitKills,
+                        outfitDeaths: object.outfitDeaths,
+                        outfitSuicides: object.outfitSuicides,
+                        outfitTKs: object.outfitTKs,
+                        outfitServer: object.world
+                    };
+
+                    dbQueryParameter('INSERT INTO ws_outfits_total SET ?', outfitArrayKills, function() {
+                        if (config.debug.batch === true) {
+                            console.log(success("Batch updated outfit totals for outfit #" + outfitID));
+                        }
+                    });
+                }
             });
         });
-
-        dbOutfitUpdate.release();
-        callback();
     });
+
+    if (config.debug.batch === true) {
+        console.log(success("BATCH OUTFIT TOTALS UPDATE FOR ALERTS COMPLETE"));
+    }
+    callback();
 }
 
 function batchUpdateClassTotals(callback)
 {
-    pool.getConnection(function(poolErr, dbClassUpdate)
-    {
-        if (poolErr)
-        {
-            throw(poolErr);
-        }
+    Object.keys(classTotalsUpdates).forEach(function(resultID) {
+        Object.keys(classTotalsUpdates[resultID]).forEach(function(classID) {
+            var object = clone(classTotalsUpdates[resultID][classID]);
+            delete classTotalsUpdates[resultID][classID];
 
-        Object.keys(classTotalsUpdates).forEach(function(resultID)
-        {
-            Object.keys(classTotalsUpdates[resultID]).forEach(function(classID)
-            {
-                var object = clone(classTotalsUpdates[resultID][classID]);
-                delete classTotalsUpdates[resultID][classID];
+            var updateLoadoutQuery = 'UPDATE ws_classes SET kills=kills+'+object.kills+', deaths=deaths+'+object.deaths+', teamkills=teamkills+'+object.teamkills+', suicides=suicides+'+object.suicides+' WHERE resultID = '+resultID+' AND classID = '+classID;
 
-                var updateLoadoutQuery = 'UPDATE ws_classes SET kills=kills+'+object.kills+', deaths=deaths+'+object.deaths+', teamkills=teamkills+'+object.teamkills+', suicides=suicides+'+object.suicides+' WHERE resultID = '+resultID+' AND classID = '+classID;
-
-                dbClassUpdate.query(updateLoadoutQuery, function(err, result)
-                {
-                    if (err)
-                    {
-                        if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                        {
-                            reportError(err, "Unable to update class row");
-                        }
-                        else if (err)
-                        {
-                            handleDeadlock(updateLoadoutQuery, "Class Attacker Update", 0);
-                        }
+            dbQuery(updateLoadoutQuery, function(result) {
+                if (result.affectedRows === 0) {// If missing record
+                    if (config.debug.classes === true) {
+                        console.log(notice("INSERTING Class Attacker RECORD"));
                     }
-                    else if (result.affectedRows === 0) // If missing record
-                    {
-                        if (config.debug.classes === true)
-                        {
-                            console.log(notice("INSERTING Class Attacker RECORD"));
+
+                    var classArray = {
+                        resultID : resultID,
+                        classID: classID,
+                        kills: object.kills,
+                        deaths: object.deaths,
+                        teamkills: object.teamkills,
+                        suicides: object.suicides
+                    };
+
+                    dbQueryParameter('INSERT INTO ws_classes SET ?', classArray, function() {
+                        if (config.debug.classes === true) {
+                            console.log(success("Batch updated class totals for alert #" + resultID));
+                        }
+                    });
+                }
+            });
+        });
+    });
+
+    Object.keys(classPlayerUpdates).forEach(function(resultID) {
+        Object.keys(classPlayerUpdates[resultID]).forEach(function(classID) {
+            Object.keys(classPlayerUpdates[resultID][classID]).forEach(function(playerID) {
+                var object = clone(classPlayerUpdates[resultID][classID][playerID]);
+                delete classPlayerUpdates[resultID][classID][playerID];
+
+                var updatePlayerLoadoutQuery = 'UPDATE ws_classes_totals SET kills=kills+'+object.kills+', deaths=deaths+'+object.deaths+', teamkills=teamkills+'+object.teamkills+', suicides=suicides+'+object.suicides+' WHERE resultID = '+resultID+' AND classID = '+classID+' AND playerID = '+playerID;
+
+                dbQuery(updatePlayerLoadoutQuery, function(result) {
+                    if (result.affectedRows === 0) { // If missing record
+                        if (config.debug.classes === true) {
+                            console.log(notice("INSERTING Class Player Totals RECORD"));
                         }
 
-                        var classArray =
-                        {
-                            resultID : resultID,
-                            classID: classID,
-                            kills: object.kills,
-                            deaths: object.deaths,
-                            teamkills: object.teamkills,
-                            suicides: object.suicides
+                        var classArray = {
+                            resultID  : resultID,
+                            playerID  : playerID,
+                            classID   : classID,
+                            kills     : object.kills,
+                            deaths    : object.deaths,
+                            teamkills : object.teamkills,
+                            suicides  : object.suicides
                         };
 
-                        dbClassUpdate.query('INSERT INTO ws_classes SET ?', classArray, function(err)
-                        {
-                            if (err)
-                            {
-                                if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                                {
-                                    reportError(err, "Unable to insert class attacker");
-                                }
-                                else
-                                {
-                                    handleDeadlock(updateLoadoutQuery, "Class attacker");
-                                }
+                        dbQueryParameter('INSERT INTO ws_classes_totals SET ?', classArray, function() {
+                            if (config.debug.classes === true) {
+                                console.log(success("Batch updated class totals for class #" + classID + " - alert #"+resultID));
                             }
                         });
                     }
                 });
             });
         });
-
-        Object.keys(classPlayerUpdates).forEach(function(resultID)
-        {
-            Object.keys(classPlayerUpdates[resultID]).forEach(function(classID)
-            {
-                Object.keys(classPlayerUpdates[resultID][classID]).forEach(function(playerID)
-                {
-                    var object = clone(classPlayerUpdates[resultID][classID][playerID]);
-                    delete classPlayerUpdates[resultID][classID][playerID];
-
-                    var updatePlayerLoadoutQuery = 'UPDATE ws_classes_totals SET kills=kills+'+object.kills+', deaths=deaths+'+object.deaths+', teamkills=teamkills+'+object.teamkills+', suicides=suicides+'+object.suicides+' WHERE resultID = '+resultID+' AND classID = '+classID+' AND playerID = '+playerID;
-
-                    dbClassUpdate.query(updatePlayerLoadoutQuery, function(err, result)
-                    {
-                        if (err)
-                        {
-                            if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                            {
-                                reportError(err, "Unable to update Class Player Totals row");
-                            }
-                            else if (err)
-                            {
-                                handleDeadlock(updatePlayerLoadoutQuery, "Class Player Totals Attacker Update", 0);
-                            }
-                        }
-                        else if (result.affectedRows === 0) // If missing record
-                        {
-                            if (config.debug.classes === true)
-                            {
-                                console.log(notice("INSERTING Class Player Totals RECORD"));
-                            }
-
-                            var classArray =
-                            {
-                                resultID  : resultID,
-                                playerID  : playerID,
-                                classID   : classID,
-                                kills     : object.kills,
-                                deaths    : object.deaths,
-                                teamkills : object.teamkills,
-                                suicides  : object.suicides
-                            };
-
-                            dbClassUpdate.query('INSERT INTO ws_classes_totals SET ?', classArray, function(err)
-                            {
-                                if (err)
-                                {
-                                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                                    {
-                                        reportError(err, "Unable to insert Class Player Totals");
-                                    }
-                                    else
-                                    {
-                                        handleDeadlock(updatePlayerLoadoutQuery, "Update Player Loadout");
-                                    }
-                                }
-                            });
-                        }
-                    });
-                });
-            });
-        });
-
-        dbClassUpdate.release();
     });
+
+    if (config.debug.batch === true) {
+        console.log(success("BATCH CLASS TOTALS UPDATE FOR ALERTS COMPLETE"));
+    }
 
     callback();
 }
@@ -2495,10 +1885,8 @@ function updateFactionStats(resultID, combatArray)
     var killerFID = parseInt(combatArray.attackerFaction);
     var victimFID = parseInt(combatArray.victimFaction);
 
-    if (factionUpdates[resultID] === undefined)
-    {
-        factionUpdates[resultID] =
-        {
+    if (factionUpdates[resultID] === undefined) {
+        factionUpdates[resultID] = {
             killsVS: 0,
             killsNC: 0,
             killsTR: 0,
@@ -2524,48 +1912,38 @@ function updateFactionStats(resultID, combatArray)
 
     /* If the names are missing, resolve them manually */
 
-    if (killerFID === 1)
-    {
+    if (killerFID === 1) {
         kFaction = "VS";
     }
-    else if (killerFID === 2)
-    {
+    else if (killerFID === 2) {
         kFaction = "NC";
     }
-    else if (killerFID === 3)
-    {
+    else if (killerFID === 3) {
         kFaction = "TR";
     }
 
-    if (victimFID === 1)
-    {
+    if (victimFID === 1) {
         vFaction = "VS";
     }
-    else if (victimFID === 2)
-    {
+    else if (victimFID === 2) {
         vFaction = "NC";
     }
-    else if (victimFID === 3)
-    {
+    else if (victimFID === 3) {
         vFaction = "TR";
     }
 
-    if (combatArray.teamkill === 1) // If a TK
-    {
+    if (combatArray.teamkill === 1) { // If a TK
         factionUpdates[resultID]['teamKills'+kFaction]++;
         factionUpdates[resultID]['deaths'+kFaction]++;
         factionUpdates[resultID]['totalTKs']++;
         factionUpdates[resultID]['totalDeaths']++;
 
-        if (config.debug.combat === true)
-        {
+        if (config.debug.combat === true) {
             console.log(critical("TK"));
         }
     }
-    else if (combatArray.suicide === 1) // Is it a suicide?
-    {
-        if (killerFID === 0) // If the faction is missing, use the victim
-        {
+    else if (combatArray.suicide === 1) { // Is it a suicide?
+        if (killerFID === 0) { // If the faction is missing, use the victim
             kFaction = vFaction;
         }
 
@@ -2574,20 +1952,16 @@ function updateFactionStats(resultID, combatArray)
         factionUpdates[resultID]['totalSuicides']++;
         factionUpdates[resultID]['totalDeaths']++;
 
-        if (config.debug.combat === true)
-        {
+        if (config.debug.combat === true) {
             console.log(warning("SUICIDE"));
         }
-    }
-    else // Must be a kill then
-    {
+    } else { // Must be a kill then
         factionUpdates[resultID]['kills'+kFaction]++;
         factionUpdates[resultID]['deaths'+vFaction]++;
         factionUpdates[resultID]['totalKills']++;
         factionUpdates[resultID]['totalDeaths']++;
 
-        if (config.debug.combat === true)
-        {
+        if (config.debug.combat === true) {
             console.log(success("KILL"));
         }
         
@@ -2597,9 +1971,7 @@ function updateFactionStats(resultID, combatArray)
         }
     }
 
-
-    if (config.debug.combat === true)
-    {
+    if (config.debug.combat === true) {
         console.log(kFaction);
         console.log(vFaction);
         console.log("----");
@@ -2655,8 +2027,7 @@ var vehNanite = {
 
 function insertVehicleStats(message, resultID, combat, callback)
 {
-    if(combat === 0) // If  a combat message, ignore this shizzle.
-    {
+    if (combat === 0) {// If  a combat message, ignore this shizzle.
         var killerID = message.attacker_character_id;
         var victimID = message.victim_character_id;
 
@@ -2669,7 +2040,7 @@ function insertVehicleStats(message, resultID, combat, callback)
     callback();
 }
 
-function insertExperience(message, resultID, dbConnectionXP, callback)
+function insertExperience(message, resultID, callback)
 {
     var charID = message.character_id;
     var xpType = message.experience_id;
@@ -2729,7 +2100,7 @@ function insertExperience(message, resultID, dbConnectionXP, callback)
 
     Spawn kills don't work. The Kill event get's removed instead of sending a spawn kill event
 
-    Extreme Menice and Menice kills are time based
+    Extreme Menace and Menace kills are time based
 
     High Priority Kill = 1000XP
     Extreme Menace Kill = 2000XP
@@ -2740,10 +2111,8 @@ function insertExperience(message, resultID, dbConnectionXP, callback)
 
     var typeCheck = allowedXPTypes.indexOf(xpTypeInt);
 
-    if (typeCheck !== -1)
-    {
-        if (xpTotalsUpdates[xpType] === undefined)
-        {
+    if (typeCheck !== -1) {
+        if (xpTotalsUpdates[xpType] === undefined) {
             xpTotalsUpdates[xpType] = 0;
         }
 
@@ -2751,52 +2120,22 @@ function insertExperience(message, resultID, dbConnectionXP, callback)
 
         var updateQuery = 'UPDATE ws_xp SET occurances=occurances+1 WHERE playerID = "'+charID+'" AND resultID = '+resultID+' AND type = '+xpType;
 
-        dbConnectionXP.query(updateQuery, function(err, result)
-        {
-            if (err)
-            {
-                if (err.errno === 1213 || err.errno === 1062) // If deadlock
-                {
-                    console.log(err.errno);
-                    handleDeadlock(updateQuery, "XP Update", 0);
-                }
-                else if (err)
-                {
-                    reportError(err, "Unable to update XP player record");
-                    throw(err);
-                }
-            }
-            else if (result.affectedRows === 0) // If missing record
-            {
-                if (config.debug.xpmessage === true)
-                {
+        dbQuery(updateQuery, function(result) {
+            if (result.affectedRows === 0) { // If missing record
+                if (config.debug.xpmessage === true) {
                     console.log(notice("INSERTING XP RECORD"));
                 }
 
-                var xpArray =
-                {
+                var xpArray = {
                     playerID: charID,
                     resultID: resultID,
                     type: xpType,
                     occurances: 1
                 };
 
-                dbConnectionXP.query('INSERT INTO ws_xp SET ?', xpArray, function(err)
-                {
-                    if (err)
-                    {
-                        if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                        {
-                            reportError(err, "Insert XP Stats record (#"+resultID+")");
-                        }
-                        else if (err)
-                        {
-                            handleDeadlock(updateQuery, "XP Update", 0);
-                        }
-                    }
-                    else // Fire the query that was going to happen
-                    {
-                        dbConnectionXP.query(updateQuery);
+                dbQueryParameter('INSERT INTO ws_xp SET ?', xpArray, function() {
+                    if (config.debug.xp === true) {
+                        console.log('Inserted XP record for alert #' + resultID + ' - player #' + playerID);
                     }
                 });
             }
@@ -2813,15 +2152,12 @@ function insertClassStats(resultID, combatArray)
     var attackerID      = combatArray.attackerID;
     var victimID        = combatArray.victimID;
 
-    if (classTotalsUpdates[resultID] === undefined)
-    {
+    if (classTotalsUpdates[resultID] === undefined) {
         classTotalsUpdates[resultID] = {};
     }
 
-    if (classTotalsUpdates[resultID][attackerLoadout] === undefined)
-    {
-        classTotalsUpdates[resultID][attackerLoadout] =
-        {
+    if (classTotalsUpdates[resultID][attackerLoadout] === undefined) {
+        classTotalsUpdates[resultID][attackerLoadout] = {
             kills: 0,
             deaths: 0,
             teamkills: 0,
@@ -2829,10 +2165,8 @@ function insertClassStats(resultID, combatArray)
         };
     }
 
-    if (classTotalsUpdates[resultID][victimLoadout] === undefined)
-    {
-        classTotalsUpdates[resultID][victimLoadout] =
-        {
+    if (classTotalsUpdates[resultID][victimLoadout] === undefined) {
+        classTotalsUpdates[resultID][victimLoadout] = {
             kills: 0,
             deaths: 0,
             teamkills: 0,
@@ -2842,25 +2176,20 @@ function insertClassStats(resultID, combatArray)
 
     /** PER PLAYER CLASS STATS */
 
-    if (classPlayerUpdates[resultID] === undefined)
-    {
+    if (classPlayerUpdates[resultID] === undefined) {
         classPlayerUpdates[resultID] = {};
     }
 
-    if (classPlayerUpdates[resultID][attackerLoadout] === undefined)
-    {
+    if (classPlayerUpdates[resultID][attackerLoadout] === undefined) {
         classPlayerUpdates[resultID][attackerLoadout] = {};
     }
 
-    if (classPlayerUpdates[resultID][victimLoadout] === undefined)
-    {
+    if (classPlayerUpdates[resultID][victimLoadout] === undefined) {
         classPlayerUpdates[resultID][victimLoadout] = {};
     }
 
-    if (classPlayerUpdates[resultID][attackerLoadout][attackerID] === undefined)
-    {
-        classPlayerUpdates[resultID][attackerLoadout][attackerID] =
-        {
+    if (classPlayerUpdates[resultID][attackerLoadout][attackerID] === undefined) {
+        classPlayerUpdates[resultID][attackerLoadout][attackerID] = {
             kills: 0,
             deaths: 0,
             teamkills: 0,
@@ -2868,10 +2197,8 @@ function insertClassStats(resultID, combatArray)
         };
     }
 
-    if (classPlayerUpdates[resultID][victimLoadout][victimID] === undefined)
-    {
-        classPlayerUpdates[resultID][victimLoadout][victimID] =
-        {
+    if (classPlayerUpdates[resultID][victimLoadout][victimID] === undefined) {
+        classPlayerUpdates[resultID][victimLoadout][victimID] = {
             kills: 0,
             deaths: 0,
             teamkills: 0,
@@ -2881,24 +2208,19 @@ function insertClassStats(resultID, combatArray)
 
     /**  **/
 
-    if (combatArray.teamkill === 1)
-    {
+    if (combatArray.teamkill === 1) {
         classTotalsUpdates[resultID][attackerLoadout].teamkills++;
         classTotalsUpdates[resultID][victimLoadout].deaths++;
 
         classPlayerUpdates[resultID][attackerLoadout][attackerID].teamkills++;
         classPlayerUpdates[resultID][victimLoadout][victimID].deaths++;
-    }
-    else if (combatArray.suicide === 1)
-    {
+    } else if (combatArray.suicide === 1) {
         classTotalsUpdates[resultID][victimLoadout].deaths++;
         classTotalsUpdates[resultID][victimLoadout].suicides++;
 
         classPlayerUpdates[resultID][victimLoadout][victimID].deaths++;
         classPlayerUpdates[resultID][victimLoadout][victimID].suicides++;
-    }
-    else // Normal
-    {
+    } else { // Normal
         classTotalsUpdates[resultID][attackerLoadout].kills++;
         classTotalsUpdates[resultID][victimLoadout].deaths++;
 
@@ -2907,54 +2229,25 @@ function insertClassStats(resultID, combatArray)
     }
 }
 
-function insertAchievement(message, resultID, dbConnectionCheevo, callback)
+function insertAchievement(message, resultID, callback)
 {
     var charID = message.character_id;
     var cheevoID = message.achievement_id;
 
     var updateCheevoQuery = 'UPDATE ws_achievements SET occurances=occurances+1 WHERE playerID ='+charID+' AND achievementID = '+cheevoID+' AND resultID ='+resultID;
 
-    dbConnectionCheevo.query(updateCheevoQuery, function(err, resultAchievement)
-    {
-        if (err)
-        {
-            if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-            {
-                reportError(err, "Unable to update achievement");
-            }
-            else if (err)
-            {
-                handleDeadlock(updateCheevoQuery, "Achievement Update", 0);
-            }
-        }
-
-        if (resultAchievement !== undefined && resultAchievement.affectedRows === 0) // If missing record
-        {
-            if (config.debug.achievements === true)
-            {
-                console.log(notice("INSERTING ACHIVEMENT RECORD"));
-            }
-
-            var achievementArray =
-            {
+    dbQuery(updateCheevoQuery, function(resultAchievement) {
+        if (resultAchievement !== undefined && resultAchievement.affectedRows === 0) { // If missing record
+            var achievementArray = {
                 playerID : charID,
                 resultID: resultID,
                 achievementID: cheevoID,
                 occurances: 1
             };
 
-            dbConnectionCheevo.query('INSERT INTO ws_achievements SET ?', achievementArray, function(err)
-            {
-                if (err)
-                {
-                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                    {
-                        reportError(err, "Insert Achievements Stats record (#"+resultID+")");
-                    }
-                    else
-                    {
-                        handleDeadlock(updateCheevoQuery, "Insert Achievement", 0);
-                    }
+            dbQueryParameter('INSERT INTO ws_achievements SET ?', achievementArray, function() {
+                if (config.debug.achievements === true) {
+                    console.log('Inserted achievement for player #' + charID + ' - alert #' + resultID);
                 }
             });
         }
@@ -2965,25 +2258,21 @@ function insertAchievement(message, resultID, dbConnectionCheevo, callback)
 
 var populationPulls = {};
 
-setInterval(function()
-{
+setInterval(function() {
     populationPulls = {};
 }, 30000);
 
-function insertPopulationStats(resultID, dbConnectionPopulation, callback)
+function insertPopulationStats(resultID, callback)
 {
     var populationInstance = populationInstances[resultID];
 
-    if (populationPulls[resultID] === undefined)
-    {
+    if (populationPulls[resultID] === undefined) {
         populationPulls[resultID] = true;
 
         var time = new Date().getTime();
 
-        if (populationInstance !== undefined)
-        {
-            var popArray =
-            {
+        if (populationInstance !== undefined) {
+            var popArray = {
                 resultID  : resultID,
                 timestamp : Math.round(time / 1000),
                 worldID   : parseInt(populationInstance.world),
@@ -2996,32 +2285,14 @@ function insertPopulationStats(resultID, dbConnectionPopulation, callback)
 
             sendResult("pops", popArray, resultID);
 
-            dbConnectionPopulation.query('INSERT INTO ws_pops SET ?', popArray, function(err)
-            {
-                if (err)
-                {
-                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                    {
-                        reportError(err, "Insert Population Stats");
-                    }
-                    else
-                    {
-                        reportError(err, "Insert Popualtion Stats (Non deadlock)");
-                    }
-                }
-                else
-                {
-                    console.log(success("Inserted Population Data for Alert #"+resultID));
+            dbQueryParameter('INSERT INTO ws_pops SET ?', popArray, function() {
+                if (config.debug.population) {
+                    console.log(success("Inserted ws_pops data for Alert #"+resultID));
                 }
             });
         }
-    }
-    else
-    {
-        if (config.debug.population === true)
-        {
-            console.log(notice("Population Change out of range - Skipping"));
-        }
+    } else if (config.debug.population === true) {
+        console.log(notice("Population Change out of range - Skipping"));
     }
 
     callback();
@@ -3031,47 +2302,38 @@ function sendResult(messageType, message, resultID) // Sends message to WS Clien
 {
     var messageToSend = {};
 
-    if (config.debug.responses === true)
-    {
+    if (config.debug.responses === true) {
         console.log(notice("STARTING RESULT SEND"));
     }
 
-    if (message) // If Valid
-    {
+    if (message) { // If Valid
         messageToSend.data = message;
         messageToSend.messageType = messageType;
 
-        if (config.debug.responses === true)
-        {
+        if (config.debug.responses === true) {
             console.log("WEBSOCKET TO RESULT #"+resultID+" MESSAGE:");
             console.log(messageToSend);
         }
 
-            if (resultSubscriptions[resultID]) // If script was too quick for subscription
-            {
-                Object.keys(resultSubscriptions[resultID]).forEach(function(key)
-                {
-                    var clientConnection = resultSubscriptions[resultID][key];
+        if (resultSubscriptions[resultID]) { // If script was too quick for subscription
+            Object.keys(resultSubscriptions[resultID]).forEach(function(key) {
+                var clientConnection = resultSubscriptions[resultID][key];
 
-                    clientConnection.send(JSON.stringify(messageToSend), function(error)
-                    {
-                        if (error)
-                        {
-                            delete clientConnections[clientConnection.id];
-                            delete resultSubscriptions[resultID][clientConnection.id];
+                clientConnection.send(JSON.stringify(messageToSend), function(error) {
+                    if (error) {
+                        delete clientConnections[clientConnection.id];
+                        delete resultSubscriptions[resultID][clientConnection.id];
 
-                            if (config.debug.clients === true)
-                            {
-                                console.log(notice("Websocket connection closed - Total: "+Object.keys(clientConnections).length));
-                            }
-                            console.log(critical("Client Error: "+error));
+                        if (config.debug.clients === true) {
+                            console.log(notice("Websocket connection closed - Total: "+Object.keys(clientConnections).length));
                         }
-                    });
+                        console.log(critical("Client Error: "+error));
+                    }
                 });
-            }
+            });
+        }
 
-        if (config.debug.keepalive === true && messageType !== "keepalive")
-        {
+        if (config.debug.keepalive === true && messageType !== "keepalive") {
             console.log(notice("Message Sent to Result Websockets"));
         }
     }
@@ -3081,27 +2343,21 @@ function sendMonitor(messageType, message) // Sends message to WS Clients
 {
     var messageToSend = {};
 
-    if (message) // If Valid
-    {
+    if (message) {
         messageToSend.data = message;
         messageToSend.messageType = messageType;
 
-        if (config.debug.clients === true)
-        {
+        if (config.debug.clients === true) {
             console.log("WEBSOCKET MESSAGE:");
             console.log(messageToSend);
         }
 
-        if (messageType === "alertStart" || messageType === "alertEnd" || messageType === "update") // Send to monitor
-        {
-            Object.keys(clientConnections).forEach(function(key)
-            {
+        if (messageType === "alertStart" || messageType === "alertEnd" || messageType === "update") { // Send to monitor
+            Object.keys(clientConnections).forEach(function(key) {
                 var clientConnection = clientConnections[key];
 
-                clientConnection.send(JSON.stringify(messageToSend), function(error)
-                {
-                    if (error)
-                    {
+                clientConnection.send(JSON.stringify(messageToSend), function(error) {
+                    if (error) {
                         delete clientConnections[clientConnection.id];
 
                         console.log(critical("Websocket Monitor Error: "+error));
@@ -3110,8 +2366,7 @@ function sendMonitor(messageType, message) // Sends message to WS Clients
             });
         }
 
-        if (config.debug.keepalive === true && messageType !== "keepalive")
-        {
+        if (config.debug.keepalive === true && messageType !== "keepalive") {
             console.log(notice("Message Sent to Monitor Websockets"));
         }
     }
@@ -3121,43 +2376,32 @@ function sendAdmins(messageType, message) // Sends message to WS Clients
 {
     var messageToSend = {};
 
-    if (message) // If Valid
-    {
+    if (message) {
         messageToSend.data = message;
         messageToSend.messageType = messageType;
 
-        if (config.debug.clients === true && messageType !== "perf")
-        {
+        if (config.debug.clients === true && messageType !== "perf") {
             console.log("WEBSOCKET MESSAGE:");
             console.log(messageToSend);
         }
 
-        if (messageType === "perf") // Send only to perf subs
-        {
-            Object.keys(clientAdminPerfConnections).forEach(function(key)
-            {
+        if (messageType === "perf") { // Send only to perf subs
+            Object.keys(clientAdminPerfConnections).forEach(function(key) {
                 var clientConnection = clientAdminPerfConnections[key];
 
-                clientConnection.send(JSON.stringify(messageToSend), function(error)
-                {
-                    if (error)
-                    {
+                clientConnection.send(JSON.stringify(messageToSend), function(error) {
+                    if (error) {
                         console.log(critical("Websocket Admin Error: "+error));
                         delete clientAdminPerfConnections[clientConnection.id];
                     }
                 });
             });
-        }
-        else
-        {
-            Object.keys(clientAdminConnections).forEach(function(key)
-            {
+        } else {
+            Object.keys(clientAdminConnections).forEach(function(key) {
                 var clientConnection = clientAdminConnections[key];
 
-                clientConnection.send(JSON.stringify(messageToSend), function(error)
-                {
-                    if (error)
-                    {
+                clientConnection.send(JSON.stringify(messageToSend), function(error) {
+                    if (error) {
                         console.log(critical("Websocket Admin Error: "+error));
                         delete clientAdminConnections[clientConnection.id];
                     }
@@ -3165,8 +2409,7 @@ function sendAdmins(messageType, message) // Sends message to WS Clients
             });
         }
 
-        if (config.debug.clients === true && messageType !== "perf" && messageType !== "keepalive")
-        {
+        if (config.debug.clients === true && messageType !== "perf" && messageType !== "keepalive") {
             console.log(notice("Message Sent to Admin Websockets"));
         }
     }
@@ -3176,31 +2419,24 @@ function sendWorld(messageType, message, world) // Sends message to WS Clients f
 {
     var messageToSend = {};
 
-    if (config.debug.responses === true)
-    {
+    if (config.debug.responses === true) {
         console.log(notice("STARTING WORLD SEND"));
     }
 
-    if (message) // If Valid
-    {
+    if (message) { // If Valid
         messageToSend.data = message;
         messageToSend.messageType = messageType;
 
-        if (clientWorldDebugConnections[world]) // If script was too quick for subscription
-        {
-            Object.keys(clientWorldDebugConnections[world]).forEach(function(key)
-            {
+        if (clientWorldDebugConnections[world]) { // If script was too quick for subscription
+            Object.keys(clientWorldDebugConnections[world]).forEach(function(key) {
                 var clientConnection = clientWorldDebugConnections[world][key];
 
-                clientConnection.send(JSON.stringify(messageToSend), function(error)
-                {
-                    if (error)
-                    {
+                clientConnection.send(JSON.stringify(messageToSend), function(error) {
+                    if (error) {
                         delete clientConnections[clientConnection.id];
                         delete clientWorldDebugConnections[world][clientConnection.id];
 
-                        if (config.debug.clients === true)
-                        {
+                        if (config.debug.clients === true) {
                             console.log(notice("Websocket connection closed - Total: "+Object.keys(clientConnections).length));
                         }
                         console.log(critical("Client Error: "+error));
@@ -3209,16 +2445,14 @@ function sendWorld(messageType, message, world) // Sends message to WS Clients f
             });
         }
 
-        if (config.debug.keepalive === true && messageType !== "keepalive")
-        {
+        if (config.debug.keepalive === true && messageType !== "keepalive") {
             console.log(notice("Message Sent to Result Websockets"));
         }
     }
 }
 
 // Pings connections to see if they're still alive
-setInterval(function()
-{
+setInterval(function() {
     sendAll("keepalive", "ping!");
 }, 5000);
 
@@ -3226,27 +2460,22 @@ function sendAll(messageType, message) // Sends message to WS Clients
 {
     var messageToSend = {};
 
-    if (message) // If Valid
-    {
+    if (message) { // If Valid
         messageToSend.data = message;
         messageToSend.messageType = messageType;
 
-        Object.keys(clientConnections).forEach(function(key)
-        {
+        Object.keys(clientConnections).forEach(function(key) {
             var clientConnection = clientConnections[key];
 
-            clientConnection.send(JSON.stringify(messageToSend), function(error)
-            {
-                if (error)
-                {
+            clientConnection.send(JSON.stringify(messageToSend), function(error) {
+                if (error) {
                     console.log(critical("Websocket Error: "+error));
                     delete clientConnections[clientConnection.id];
                 }
             });
         });
 
-        if (config.debug.clients === true && messageType !== "keepalive")
-        {
+        if (config.debug.clients === true && messageType !== "keepalive") {
             console.log(notice("Message Sent to All Websockets"));
             console.log(messageType);
         }
@@ -3270,16 +2499,13 @@ function DateCalc(d)
     if (day.length === 1) {
         day = "0" + day;
     }
-    if (hour.length === 1) // If needing a preceding 0
-    {
+    if (hour.length === 1) { // If needing a preceding 0
         hour = "0"+hour;
     }
-    if (minute.length === 1)
-    {
+    if (minute.length === 1) {
         minute = "0"+minute;
     }
-    if (seconds.length === 1)
-    {
+    if (seconds.length === 1) {
         seconds = "0"+seconds;
     }
 
@@ -3295,21 +2521,15 @@ function findPlayerName(playerID, world, callback)
         console.log(critical("FALSE PLAYER ID! WORLD: "+world));
         callback(false, false);
     } else {
-        if (world >= 2000)
-        {
+        if (world >= 2000) {
             url = 'http://census.daybreakgames.com/s:'+config.serviceID+'/get/ps2ps4eu:v2/character/?character_id='+playerID;
-        }
-        else if(world >= 1000)
-        {
+        } else if(world >= 1000) {
             url = 'http://census.daybreakgames.com/s:'+config.serviceID+'/get/ps2ps4us:v2/character/?character_id='+playerID;
-        }
-        else
-        {
+        } else {
             url = 'http://census.daybreakgames.com/s:'+config.serviceID+'/get/ps2:v2/character/?character_id='+playerID;
         }
 
-        if (config.debug.census === true)
-        {
+        if (config.debug.census === true) {
             console.log("========== FINDING PLAYER NAME =========");
             console.log("INPUT :"+playerID);
         }
@@ -3326,44 +2546,35 @@ function findPlayerName(playerID, world, callback)
                 var success = 1;
                 var returned;
 
-                try
-                {
+                try {
                     returned = JSON.parse(body);
                 }
-                catch(exception)
-                {
+                catch(exception) {
                     console.log(critical("BAD RETURN FROM CENSUS - Player Cache"));
                     console.log(url);
                     console.log(body);
                     success = 0;
                 }
 
-                if (success === 1)
-                {
-                    if (returned === undefined)
-                    {
+                if (success === 1) {
+                    if (returned === undefined) {
                         console.log(critical("CENSUS NO DATA!"));
                         console.log(notice("QUERY: "+url));
                     }
 
-                    if (returned.character_list !== undefined)
-                    {
+                    if (returned.character_list !== undefined) {
                         var characterListLength = returned.character_list.length;
 
-                        if (characterListLength === 0)
-                        {
+                        if (characterListLength === 0) {
                             console.log(critical("CENSUS RETURNED NO CHARACTERS!"));
                             console.log(notice("WORLD: "+world+" QUERY: "+url));
                         }
 
-                        if (success === 1)
-                        {
+                        if (success === 1) {
                             var valid = parseInt(returned.returned);
 
-                            if (valid === 1)
-                            {
-                                if (config.debug.census === true)
-                                {
+                            if (valid === 1) {
+                                if (config.debug.census === true) {
                                     console.log("RESPONSE: "+returned.character_list);
                                     console.log("INPUT :"+playerID);
                                 }
@@ -3373,27 +2584,23 @@ function findPlayerName(playerID, world, callback)
                                 var br = returned.character_list[0].battle_rank.value;
 
                                 callback(name, faction, br);
-                            }
-                            else
-                            {
-                                if (config.debug.census === true)
+                            } else {
+                                if (config.debug.census === true) {
                                     console.log(warning("FAILED TO GET PLAYER NAME!"));
+                                }
 
                                 callback(false, false, false);
                             }
                         }
                     }
-                }
-                else
-                {
+                } else {
                     console.log(warning("CENSUS API QUERY FAIL"));
                     console.log(notice("QUERY: "+url));
                 }
             });
-        }).on('error', function(e)
-        {
-              console.log("CENSUS QUERY ERROR: ", e);
-              callback(false, false);
+        }).on('error', function(e) {
+            console.log("CENSUS QUERY ERROR: ", e);
+            callback(false, false);
         });
     }
 }
@@ -3401,8 +2608,7 @@ function findPlayerName(playerID, world, callback)
 function findOutfitName(outfitID, world, callback)
 {
     var url;
-    if (outfitID === "-1" || outfitID === "0")
-    {
+    if (outfitID === "-1" || outfitID === "0") {
         return "";
     }
 
@@ -3410,21 +2616,16 @@ function findOutfitName(outfitID, world, callback)
         console.log(critical("OUTFIT ID IS FALSE!"));
     }
 
-    if (world >= 2000)
-    {
+    if (world >= 2000) {
         url = 'http://census.daybreakgames.com/s:'+config.serviceID+'/get/ps2ps4eu:v2/outfit/?outfit_id='+outfitID;
     }
-    else if(world >= 1000)
-    {
+    else if (world >= 1000) {
         url = 'http://census.daybreakgames.com/s:'+config.serviceID+'/get/ps2ps4us:v2/outfit/?outfit_id='+outfitID;
-    }
-    else
-    {
+    } else {
         url = 'http://census.daybreakgames.com/s:'+config.serviceID+'/get/ps2:v2/outfit/?outfit_id='+outfitID;
     }
 
-    if (config.debug.census === true)
-    {
+    if (config.debug.census === true) {
         console.log("========== FINDING OUTFIT NAME =========");
         console.log("INPUT :"+outfitID);
     }
@@ -3442,24 +2643,19 @@ function findOutfitName(outfitID, world, callback)
             var returned;
             var valid = 0;
 
-            try
-            {
+            try {
                 returned = JSON.parse(body);
             }
-            catch(exception)
-            {
+            catch(exception) {
                 console.log(critical("BAD RETURN FROM CENSUS - Outfit Cache"));
                 success = 0;
             }
 
-            if (success === 1)
-            {
+            if (success === 1) {
                 valid = returned.returned;
 
-                if (valid === 1)
-                {
-                    if (config.debug.census === true)
-                    {
+                if (valid === 1) {
+                    if (config.debug.census === true) {
                         console.log("RESPONSE: "+returned.outfit_list);
                         console.log("INPUT :"+outfitID);
                     }
@@ -3469,11 +2665,8 @@ function findOutfitName(outfitID, world, callback)
                     var leader = returned.outfit_list[0].leader_character_id;
 
                     callback(name, tag, leader);
-                }
-                else
-                {
-                    if (config.debug.census === true)
-                    {
+                } else {
+                    if (config.debug.census === true) {
                         console.log(warning("FAILED TO GET OUTFIT NAME!"));
                         console.log(url);
                     }
@@ -3483,215 +2676,137 @@ function findOutfitName(outfitID, world, callback)
             }
         });
     }).on('error', function(e) {
-          console.log("CENSUS OUTFIT ERROR:: ", e);
-          callback(false, false, false);
+        console.log("CENSUS OUTFIT ERROR:: ", e);
+        callback(false, false, false);
     });
 }
 
-function checkPlayerCache(playerID, world, dbConnectionCache, callback)
+function checkPlayerCache(playerID, world, callback)
 {
-    dbConnectionCache.query('SELECT * FROM player_cache WHERE playerID="'+playerID+'"', function(err, result)
+    dbQuery('SELECT * FROM player_cache WHERE playerID="'+playerID+'"', 'cache', function(result)
     {
-        if (err)
-        {
-            throw err;
+        if (config.debug.cache === true) {
+            console.log(notice("PLAYER CACHE RESULT: " + JSON.stringify(result[0], null, 4)));
         }
-        else
+
+        if (!result[0]) // If empty
         {
-            if (config.debug.cache === true)
-            {
-                console.log(notice("PLAYER CACHE RESULT: " + JSON.stringify(result[0], null, 4)));
-            }
+            findPlayerName(playerID, world, function(name, faction, br) {
+                if (name !== false && faction !== false) {
+                    var now = Math.round(new Date().getTime() / 1000);
+                    var cacheExpires = now + 10800; // 3 hours
 
-            if (!result[0]) // If empty
-            {
-                findPlayerName(playerID, world, function(name, faction, br)
-                {
-                    if (name !== false && faction !== false)
-                    {
-                        var now = Math.round(new Date().getTime() / 1000);
-                        var cacheExpires = now + 10800; // 3 hours
+                    var insertPArray = {
+                        playerID: playerID,
+                        playerName: name,
+                        playerFaction: faction,
+                        playerBR: br,
+                        expires: cacheExpires
+                    };
 
-                        var insertPArray =
-                        {
-                            playerID: playerID,
-                            playerName: name,
-                            playerFaction: faction,
-                            playerBR: br,
-                            expires: cacheExpires
-                        };
+                    dbQueryParameter('INSERT INTO player_cache SET ?', insertPArray, 'cache', function() {
+                        if (config.debug.cache === true) {
+                            console.log(success("INSERTED PLAYER RECORD INTO CACHE TABLE"));
+                        }
 
-                        dbConnectionCache.query('INSERT INTO player_cache SET ?', insertPArray, function(err)
-                        {
-                            if (err)
-                            {
-                                if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                                {
-                                    reportError(err, "Insert Player Cache Record");
-                                }
-                                else
-                                {
-                                    if (config.debug.cache === true)
-                                    {
-                                        console.log(warning("INVALID / DUPLICATED PLAYER CACHE RECORD DETECTED! Skipping!"));
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                if (config.debug.cache === true)
-                                {
-                                    console.log(success("INSERTED PLAYER RECORD INTO CACHE TABLE"));
-                                }
-
-                                dbConnectionCache.query('UPDATE cache_hits SET cacheMisses=cacheMisses+1 WHERE dataType="PlayerCache"');
-                                callback(name, br);
-                            }
+                        dbQuery('UPDATE cache_hits SET cacheMisses=cacheMisses+1 WHERE dataType="PlayerCache"', 'cache', function() {
+                            callback(name, br);
                         });
-                    }
-                    else
-                    {
-                        console.log(critical("CENSUS PLAYER QUERY FAILED! SEARCHED FOR PLAYER: "+playerID));
-                        callback(false, false);
-                    }
-                });
-            }
-            else if (result[0])
-            {
-                if (config.debug.cache === true)
-                {
-                    console.log(success("PLAYER CACHE HIT!"));
+                    });
+                } else {
+                    console.log(critical("CENSUS PLAYER QUERY FAILED! SEARCHED FOR PLAYER: "+playerID));
+                    callback(false, false);
                 }
-
-                dbConnectionCache.query('UPDATE cache_hits SET cacheHits=CacheHits+1 WHERE dataType="PlayerCache"');
-                callback(result[0].playerName, result[0].playerBR);
+            });
+        } else if (result[0]) {
+            if (config.debug.cache === true) {
+                console.log(success("PLAYER CACHE HIT!"));
             }
+
+            dbQuery('UPDATE cache_hits SET cacheHits=CacheHits+1 WHERE dataType="PlayerCache"', 'cache', function() {
+                callback(result[0].playerName, result[0].playerBR);
+            });
         }
     });
 }
 
-function checkOutfitCache(outfitID, worldID, dbConnectionCache, callback)
+function checkOutfitCache(outfitID, worldID, callback)
 {
-    if (config.debug.cache === true)
-    {
+    if (config.debug.cache === true) {
         console.log(critical("OUTFIT ID: "+outfitID));
     }
 
-    if (outfitID == "-1" || outfitID == "0")
-    {
-        if (config.debug.cache === true)
-        {
+    if (outfitID === "-1" || outfitID === "0") {
+        if (config.debug.cache === true) {
             console.log(critical("IGNORING OUTFIT PROCESSING"));
         }
 
-        callback(undefined, undefined, undefined, undefined);
+        return callback(undefined, undefined, undefined, undefined);
     }
-    else
-    {
-        dbConnectionCache.query('SELECT * FROM outfit_cache WHERE outfitID="'+outfitID+'"', function(err, result)
-        {
-            if (err)
-            {
-                throw err;
-            }
-            else
-            {
-                if (config.debug.cache === true)
-                {
-                    console.log(notice("OUTFIT CACHE RESULT: " + JSON.stringify(result[0], null, 4)));
+
+    dbQuery('SELECT * FROM outfit_cache WHERE outfitID="'+outfitID+'"', 'cache', function(result) {
+        if (config.debug.cache === true) {
+            console.log(notice("OUTFIT CACHE RESULT: " + JSON.stringify(result[0], null, 4)));
+        }
+
+        if (!result[0]) {// If empty
+            findOutfitName(outfitID, worldID, function(outfitName, tag, leaderID) {
+                if (config.debug.cache === true) {
+                    console.log("FOUND OUTFIT NAME");
                 }
 
-                if (!result[0]) // If empty
-                {
-                    findOutfitName(outfitID, worldID, function(outfitName, tag, leaderID)
-                    {
-                        if (config.debug.cache === true)
-                        {
-                            console.log("FOUND OUTFIT NAME");
-                        }
-                        if (leaderID === false) {
-                            console.log(critical("MISSING LEADER ID! Skipping cache."));
-                            callback (false, false, false, false);
-                        }
+                if (leaderID === false) {
+                    console.log(critical("MISSING LEADER ID! Skipping cache."));
+                    callback (false, false, false, false);
+                }
 
-                        if (outfitName !== false)
-                        {
-                            findPlayerName(leaderID, worldID, function(name, faction)
-                            {
-                                var now = Math.round(new Date().getTime() / 1000);
-                                var cacheExpires = now + 86400; // 1 Day
+                if (outfitName !== false) {
+                    findPlayerName(leaderID, worldID, function(name, faction) {
+                        var now = Math.round(new Date().getTime() / 1000);
+                        var cacheExpires = now + 86400; // 1 Day
 
-                                var insertOArray =
-                                {
-                                    outfitName: outfitName,
-                                    outfitTag: tag,
-                                    outfitFaction: faction,
-                                    outfitID: outfitID,
-                                    outfitWorld: worldID,
-                                    expires: cacheExpires
-                                };
-                                dbConnectionCache.query('INSERT INTO outfit_cache SET ?', insertOArray, function(err)
-                                {
-                                    if (err)
-                                    {
-                                        if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                                        {
-                                            reportError(err, "Insert Outfit Cache Record");
-                                        }
-                                        else
-                                        {
-                                            if (config.debug.databaseWarnings === true)
-                                            {
-                                                console.log(warning("INVALID / DUPLICATED OUTFIT CACHE RECORD DETECTED! Skipping!"));
-                                            }
-                                        }
-                                    }
-                                    else
-                                    {
-                                        if (config.debug.cache === true)
-                                        {
-                                            console.log(success("INSERTED OUTFIT RECORD INTO CACHE TABLE"));
-                                        }
+                        var insertOArray = {
+                            outfitName: outfitName,
+                            outfitTag: tag,
+                            outfitFaction: faction,
+                            outfitID: outfitID,
+                            outfitWorld: worldID,
+                            expires: cacheExpires
+                        };
 
-                                        dbConnectionCache.query('UPDATE cache_hits SET cacheMisses=cacheMisses+1 WHERE dataType="OutfitCache"');
+                        dbQueryParameter('INSERT INTO outfit_cache SET ?', insertOArray, 'cache', function() {
+                            if (config.debug.cache === true) {
+                                console.log(success("INSERTED OUTFIT RECORD INTO CACHE TABLE"));
+                            }
 
-                                        callback(outfitName, tag, faction, outfitID);
-                                    }
-                                });
-                            });
-                        }
-                        else
-                        {
-                            console.log(critical("MISSING OUTFIT INFO! Skipping cache."));
-                            console.log(notice(outfitID));
-                            console.log(notice(worldID));
-                            callback (false, false, false, false);
-                        }
+                            dbQuery('UPDATE cache_hits SET cacheMisses=cacheMisses+1 WHERE dataType="OutfitCache"', 'cache');
+                            callback(outfitName, tag, faction, outfitID);
+                        });
                     });
+                } else {
+                    console.log(critical("MISSING OUTFIT INFO! Skipping cache."));
+                    console.log(notice(outfitID));
+                    console.log(notice(worldID));
+                    callback (false, false, false, false);
                 }
-                else
-                {
-                    dbConnectionCache.query('UPDATE cache_hits SET cacheHits=cacheHits+1 WHERE dataType="OutfitCache"');
+            });
+        } else {
+            dbQuery('UPDATE cache_hits SET cacheHits=cacheHits+1 WHERE dataType="OutfitCache"', 'cache');
 
-                    if (config.debug.cache === true)
-                    {
-                        console.log(success("OUTFIT CACHE HIT!"));
-                    }
-
-                    callback(result[0].outfitName, result[0].outfitTag, result[0].outfitFaction, result[0].outfitID);
-                }
+            if (config.debug.cache === true) {
+                console.log(success("OUTFIT CACHE HIT!"));
             }
-        });
-    }
+
+            callback(result[0].outfitName, result[0].outfitTag, result[0].outfitFaction, result[0].outfitID);
+        }
+    });
 }
 
-function calcWinners(message, resultID, Lresult, dbConnection, callback)
+function calcWinners(message, resultID, Lresult, callback)
 {
-    dbConnection.query("SELECT * FROM ws_results WHERE resultID="+resultID, function(error, result)
-    {
-        if (!result[0]) // If record is empty
-        {
-            throw ("NO RESULT RECORD COULD BE FOUND! FOR ALERT #"+resultID);
+    dbQuery("SELECT * FROM ws_results WHERE resultID="+resultID, function(result) {
+        if (!result[0]) { // If record is empty
+            reportError("NO RESULT RECORD COULD BE FOUND! FOR ALERT #"+resultID, 'calcWinners', true);
         }
 
         var winner = "TO CALC";
@@ -3762,6 +2877,8 @@ function calcWinners(message, resultID, Lresult, dbConnection, callback)
 
 function calculateCriticalMassWinners(message, empires, mapResult, callback)
 {
+    console.log('CALCULATING CRITICAL MASS WINNERS');
+
     APIAlertTypes(message.type_id, function(result) {
         var metaInfo = result;
         var triggeringFactionWon = false;
@@ -3796,8 +2913,7 @@ function APIAlertTypes(eventID, callback)
     var zone = null;
     var faction = null;
 
-    switch (eventID)
-    {
+    switch (eventID) {
         case '1':
             type = "Territory";
             cont = "Indar";
@@ -3954,8 +3070,7 @@ function APIAlertTypes(eventID, callback)
 
     var result = null;
 
-    if (type !== null && cont !== null) // If valid
-    {
+    if (type !== null && cont !== null) { // If valid
         result = {
             type: type,
             cont: cont,
@@ -3972,17 +3087,14 @@ var charIDs = [];
 
 function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, resultID, attName, vicName)
 {
-    if (!attName)
-    {
+    if (!attName) {
         attName = false;
     }
-    if (!vicName)
-    {
+    if (!vicName) {
         vicName = false;
     }
 
-    if (!charFlags[charID])
-    {
+    if (!charFlags[charID]) {
         charFlags[charID] = {
             "charID": charID,
             "vCharID": vCharID,
@@ -3996,85 +3108,65 @@ function addKillMonitor(charID, vCharID, flag, timestamp, killerVID, victimVID, 
             "vName": vicName
         };
 
-        if (charIDs !== undefined)
-        {
+        if (charIDs !== undefined) {
             charIDs.push(charID);
-        }
-        else
-        {
+        } else {
             charIDs = charID;
         }
     }
 
-    if (flag === "vKill")
-    {
-        if (charFlags[charID].vKill === 0)
-        {
+    if (flag === "vKill") {
+        if (charFlags[charID].vKill === 0) {
             charFlags[charID].killerVID = killerVID;
             charFlags[charID].victimVID = victimVID;
             charFlags[charID].vKill = 1;
         }
     }
-    else if (flag === "kill")
-    {
-        if (charFlags[charID].kill === 0)
-        {
+    else if (flag === "kill") {
+        if (charFlags[charID].kill === 0) {
             charFlags[charID].kill = 1;
             charFlags[charID].killerVID = killerVID;
         }
     }
 
-    if ((attName !== false) && (vicName !== false))
-    {
+    if (attName !== false && vicName !== false) {
         charFlags[charID].aName = attName;
         charFlags[charID].vName = vicName;
     }
 }
 
-setInterval(function()
-{
-    for (var i = charIDs.length - 1; i >= 0; i--) // Loop through all of the monitored characters
-    {
+setInterval(function() {
+    for (var i = charIDs.length - 1; i >= 0; i--) { // Loop through all of the monitored characters
         var charID = charIDs[i];
 
-        if (charFlags[charID])
-        {
+        if (charFlags[charID]) {
             var killerVID = charFlags[charID].killerVID;
             var victimVID = charFlags[charID].victimVID;
             var resultID = charFlags[charID].resultID;
             var killerID = charFlags[charID].charID;
             var victimID = charFlags[charID].vCharID;
 
-            if (charFlags[charID].kill === 1 && charFlags[charID].vKill === 1) // Vehicle with Occ
-            {
-                if (config.debug.vehicles === true)
-                {
+            if (charFlags[charID].kill === 1 && charFlags[charID].vKill === 1) { // Vehicle with Occ
+                if (config.debug.vehicles === true) {
                     console.log(critical("VEHICLE KILL WITH OCCUPANT DETECTED!"));
                 }
 
                 incrementVehicleKills(1, killerVID, victimVID, resultID, killerID, victimID);
-            }
-            else if ((charFlags[charID].kill === 0) && (charFlags[charID].vKill === 1)) // Vehicle without Occ
-            {
-                if (config.debug.vehicles === true)
-                {
+            } else if (charFlags[charID].kill === 0 && charFlags[charID].vKill === 1) { // Vehicle without Occ
+                if (config.debug.vehicles === true) {
                     console.log(critical("VEHICLE KILL W/O OCCUPANT DETECTED"));
                 }
 
                 incrementVehicleKills(2, killerVID, victimVID, resultID, killerID, victimID);
             }
-            else if ((charFlags[charID].kill === 1) && (charFlags[charID].vKill === 0)) // Normal Kill Occ
-            {
-                if (config.debug.vehicles === true)
-                {
+            else if (charFlags[charID].kill === 1 && charFlags[charID].vKill === 0) { // Normal Kill Occ
+                if (config.debug.vehicles === true) {
                     console.log(critical("NORMAL KILL DETECTED"));
                 }
 
                 incrementVehicleKills(3, killerVID, 0, resultID, killerID, victimID);
             }
-        }
-        else
-        {
+        } else {
             console.log("CHARFLAG DOESN'T EXIST!");
         }
     }
@@ -4086,356 +3178,187 @@ setInterval(function()
 
 function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
 {
-    if (resultID !== undefined)
-    {
-        pool.getConnection(function(poolErr, dbConnectionVehicleKill)
-        {
-            if (poolErr)
-            {
-                throw(poolErr);
-            }
-            else
-            {
-                var Kquery;
-                var Vquery;
+    if (resultID !== undefined) {
+        var Kquery;
+        var Vquery;
 
-                if (kID === 0) // If the kill was by infantry
-                {
-                    switch(type)
-                    {
-                        case 1:
-                        {
-                            type = 11;
-                            break;
-                        }
-                        case 2:
-                        {
-                            type = 22;
-                            break;
-                        }
-                    }
+        if (kID === 0) { // If the kill was by infantry
+            switch(type) {
+                case 1: {
+                    type = 11;
+                    break;
                 }
-
-                var vehicleTotalKillObject = {
-                    vehicleID: kID,
-                    killCount: 1,
-                    killICount: 0,
-                    killVCount: 0,
-                    deathCount: 0,
-                    deathICount: 0,
-                    deathVCount: 0,
-                    bails: 0,
-                    resultID: resultID
-                };
-                
-                var vehicleTotalDeathObject = {
-                    vehicleID: vID,
-                    killCount: 0,
-                    killICount: 0,
-                    killVCount: 0,
-                    deathCount: 1,
-                    deathICount: 0,
-                    deathVCount: 0,
-                    bails: 0,
-                    resultID: resultID
-                };
-
-                var vehiclePlayerKillObject = {
-                    vehicleID: kID,
-                    playerID: killerID,
-                    killCount: 1,
-                    killICount: 0,
-                    killVCount: 0,
-                    deathCount: 0,
-                    deathICount: 0,
-                    deathVCount: 0,
-                    bails: 0,
-                    resultID: resultID
-                };
-
-                var vehiclePlayerDeathObject = {
-                    vehicleID: vID,
-                    playerID: victimID,
-                    killCount: 0,
-                    killICount: 0,
-                    killVCount: 0,
-                    deathCount: 1,
-                    deathICount: 0,
-                    deathVCount: 0,
-                    bails: 0,
-                    resultID: resultID
-                };
-
-                var nanites = vehNanite[vID];
-
-                switch(type)
-                {
-                    case 1: // V->V w/ Occ
-                    {
-                        Kquery = "killCount=killCount+1, killVCount=killVCount+1";
-                        Vquery = "deathCount=deathCount+1, deathVCount=deathVCount+1";
-                        vehicleTotalKillObject.killVCount = 1;
-                        vehiclePlayerKillObject.killVCount = 1;
-                        vehicleTotalDeathObject.deathVCount = 1;
-                        vehiclePlayerDeathObject.deathVCount = 1;
-                        break;
-                    }
-                    case 11: // I->V w/ Occ
-                    {
-                        Vquery = "deathCount=deathCount+1, deathICount=deathICount+1";
-                        vehicleTotalDeathObject.deathICount = 1;
-                        vehiclePlayerDeathObject.deathICount = 1;
-                        break;
-                    }
-                    case 2: // V->V no Occ
-                    {
-                        Kquery = "killCount=killCount+1, killVCount=killVCount+1";
-                        Vquery = "deathCount=deathCount+1, deathVCount=deathVCount+1, bails=bails+1";
-                        vehicleTotalKillObject.killVCount = 1;
-                        vehiclePlayerKillObject.killVCount = 1;
-                        vehicleTotalDeathObject.deathVCount = 1;
-                        vehicleTotalDeathObject.bails = 1;
-                        vehiclePlayerDeathObject.deathVCount = 1;
-                        vehiclePlayerDeathObject.bails = 1;
-                        break;
-                    }
-                    case 22: // I->V no Occ
-                    {
-                        Vquery = "deathCount=deathCount+1, deathICount=deathICount+1, bails=bails+1";
-                        vehicleTotalDeathObject.deathICount = 1;
-                        vehicleTotalDeathObject.bails = 1;
-                        vehiclePlayerDeathObject.deathICount = 1;
-                        vehiclePlayerDeathObject.bails = 1;
-                        break;
-                    }
-                    case 3: // V->I
-                    {
-                        Kquery = "killCount=killCount+1, killICount=killICount+1";
-                        vehicleTotalKillObject.killICount = 1;
-                        vehiclePlayerKillObject.killICount = 1;
-                        break;
-                    }
-                }
-
-                if (kID !== 0)
-                {
-                    // Killer Vehicle
-                    dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Kquery+" WHERE vehicleID = "+kID+" AND resultID = "+resultID, function(err, result)
-                    {
-                        if (err)
-                        {
-                            if (err.errno === 1213) // If deadlock
-                            {
-                                handleDeadlock("UPDATE ws_vehicles_totals SET "+Kquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, "Vehicle Update", 0);
-                            }
-                            else
-                            {
-                                throw(err);
-                            }
-
-                        }
-                        else if (result.affectedRows === 0) // If no update happened, try again
-                        {
-                            if (config.debug.vehicles === true)
-                            {
-                                console.log("Inserting New Killer Vehicle Record");
-                                console.log(kID);
-                                console.log(resultID);
-                            }
-
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalKillObject, function(err)
-                            {
-                                if (err)
-                                {
-                                    if (err.errno !== 1062) // If not a duplicate
-                                    {
-                                        console.log(err);
-                                        reportError(err, "Insert ws_vehicles_totals");
-                                    }
-                                }
-                            });
-                        }
-                    });
-
-                    dbConnectionVehicleKill.query("UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID, function(err, result)
-                    {
-                        if (err)
-                        {
-                            if (err.errno === 1213) // If deadlock
-                            {
-                                handleDeadlock("UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID, "Vehicle Update", 0);
-                            }
-                            else
-                            {
-                                throw(err);
-                            }
-
-                        }
-                        else if (result.affectedRows === 0) // If no update happened, must be an insert
-                        {
-                            if (config.debug.vehicles === true)
-                            {
-                                console.log("Inserting New Killer Vehicle Record");
-                                console.log(kID);
-                                console.log(resultID);
-                            }
-
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles SET ?", vehiclePlayerKillObject, function(err)
-                            {
-                                if (err)
-                                {
-                                    if (err.errno !== 1062) // If not a duplicate
-                                    {
-                                        reportError(err, "Insert Vehicle Player Kill Record");
-                                        throw(err);
-                                    }
-                                }
-                                else
-                                {
-                                    dbConnectionVehicleKill.query("UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID, function(err)
-                                    {
-                                        if (err)
-                                        {
-                                            if (err.errno === 1213) // If deadlock
-                                            {
-                                                console.log(critical("DEADLOCK DETECTED (Vehicles Player Kill)"));
-
-                                                handleDeadlock("UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID, "Vehicle Update", 0);
-                                            }
-                                        }
-                                    });
-                                }
-                            });
-                        }
-                        var toSend = {
-                            vehicleID: kID,
-                            type: 'kill',
-                            iMetric: vehicleTotalKillObject.killICount,
-                            vMetric: vehicleTotalKillObject.killVCount,
-                            resultID: resultID
-                        };
-
-                        sendResult("vehicleCombat", toSend, resultID);
-                    });
-                }
-
-                if (vID !== 0)
-                {
-                    // Victim Vehicle
-                    dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, function(err, result)
-                    {
-                        if (err)
-                        {
-                            if (err.errno === 1213) // If deadlock
-                            {
-                                console.log(critical("DEADLOCK DETECTED (Update Vehicle Victim Total Record)"));
-
-                                handleDeadlock("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, "Vehicle Update", 0);
-                            }
-                            else
-                            {
-                                console.log(err);
-                                reportError(err, "Update Vehicle Victim Total Record");
-                                throw(err);
-                            }
-
-                        }
-                        else if (result.affectedRows === 0) // If no update happened, try again
-                        {
-                            if (config.debug.vehicles === true)
-                            {
-                                console.log("Inserting New Victim Vehicle Total Record");
-                                console.log(vID);
-                                console.log(resultID);
-                            }
-
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalDeathObject, function(err)
-                            {
-                                if (err)
-                                {
-                                    if (err.errno !== 1062) // If not a duplicate
-                                    {
-                                        console.log(err);
-                                        reportError(err, "Inserting New Victim Vehicle Total Record #2");
-                                        throw(err);
-                                    }
-                                }
-                                else
-                                {
-                                    setTimeout(function()
-                                    {
-                                        dbConnectionVehicleKill.query("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, function(err)
-                                        {
-                                            if (err)
-                                            {
-                                                throw(err);
-                                            }
-                                        });
-                                    }, 500);
-                                }
-                            });
-                        }
-                    });
-
-                    dbConnectionVehicleKill.query("UPDATE ws_vehicles SET "+Vquery+" WHERE resultID = "+resultID+" AND playerID='"+victimID+"' AND vehicleID="+vID, function(err, result)
-                    {
-                        if (err)
-                        {
-                            if (err.errno === 1213) // If deadlock
-                            {
-                                handleDeadlock("UPDATE ws_vehicles SET "+Vquery+" WHERE resultID = "+resultID+" AND playerID='"+victimID+"' AND vehicleID="+vID, "Vehicle Update", 0);
-                            }
-                            else
-                            {
-                                console.log(err);
-                                reportError(err, "Insert Vehicle Player Victim Record");
-                                throw(err);
-                            }
-
-                        }
-                        else if (result.affectedRows === 0) // If no update happened, must be an insert
-                        {
-                            if (config.debug.vehicles === true)
-                            {
-                                console.log("Inserting New Victim Vehicle Record");
-                                console.log(vID);
-                                console.log(resultID);
-                            }
-
-                            dbConnectionVehicleKill.query("INSERT INTO ws_vehicles SET ?", vehiclePlayerDeathObject, function(err)
-                            {
-                                if (err)
-                                {
-                                    if (err.errno !== 1062) // If not a duplicate
-                                    {
-                                        console.log(err);
-                                        reportError(err, "Insert Vehicle Player Victim Record #2");
-                                        throw(err);
-                                    }
-                                    else
-                                    {
-                                        handleDeadlock("UPDATE ws_vehicles SET "+Vquery+" WHERE resultID = "+resultID+" AND playerID='"+victimID+"' AND vehicleID="+vID, "Vehicle Player Victim Update", 0);
-                                    }
-                                }
-                            });
-                        }
-                        var toSend = {
-                            vehicleID: vID,
-                            type: 'death',
-                            iMetric: vehiclePlayerDeathObject.deathICount,
-                            vMetric: vehiclePlayerDeathObject.deathVCount,
-                            bail: vehiclePlayerDeathObject.bails,
-                            nanites: nanites,
-                            resultID: resultID
-                        };
-
-                        sendResult("vehicleCombat", toSend, resultID);
-                    });
+                case 2: {
+                    type = 22;
+                    break;
                 }
             }
+        }
 
-            dbConnectionVehicleKill.release();
-        });
+        var vehicleTotalKillObject = {
+            vehicleID: kID,
+            killCount: 1,
+            killICount: 0,
+            killVCount: 0,
+            deathCount: 0,
+            deathICount: 0,
+            deathVCount: 0,
+            bails: 0,
+            resultID: resultID
+        };
+
+        var vehicleTotalDeathObject = {
+            vehicleID: vID,
+            killCount: 0,
+            killICount: 0,
+            killVCount: 0,
+            deathCount: 1,
+            deathICount: 0,
+            deathVCount: 0,
+            bails: 0,
+            resultID: resultID
+        };
+
+        var vehiclePlayerKillObject = {
+            vehicleID: kID,
+            playerID: killerID,
+            killCount: 1,
+            killICount: 0,
+            killVCount: 0,
+            deathCount: 0,
+            deathICount: 0,
+            deathVCount: 0,
+            bails: 0,
+            resultID: resultID
+        };
+
+        var vehiclePlayerDeathObject = {
+            vehicleID: vID,
+            playerID: victimID,
+            killCount: 0,
+            killICount: 0,
+            killVCount: 0,
+            deathCount: 1,
+            deathICount: 0,
+            deathVCount: 0,
+            bails: 0,
+            resultID: resultID
+        };
+
+        var nanites = vehNanite[vID];
+
+        switch(type) {
+            case 1: { // V->V w/ Occ
+                Kquery = "killCount=killCount+1, killVCount=killVCount+1";
+                Vquery = "deathCount=deathCount+1, deathVCount=deathVCount+1";
+                vehicleTotalKillObject.killVCount = 1;
+                vehiclePlayerKillObject.killVCount = 1;
+                vehicleTotalDeathObject.deathVCount = 1;
+                vehiclePlayerDeathObject.deathVCount = 1;
+                break;
+            }
+            case 11: { // I->V w/ Occ
+                Vquery = "deathCount=deathCount+1, deathICount=deathICount+1";
+                vehicleTotalDeathObject.deathICount = 1;
+                vehiclePlayerDeathObject.deathICount = 1;
+                break;
+            }
+            case 2: { // V->V no Occ
+                Kquery = "killCount=killCount+1, killVCount=killVCount+1";
+                Vquery = "deathCount=deathCount+1, deathVCount=deathVCount+1, bails=bails+1";
+                vehicleTotalKillObject.killVCount = 1;
+                vehiclePlayerKillObject.killVCount = 1;
+                vehicleTotalDeathObject.deathVCount = 1;
+                vehicleTotalDeathObject.bails = 1;
+                vehiclePlayerDeathObject.deathVCount = 1;
+                vehiclePlayerDeathObject.bails = 1;
+                break;
+            }
+            case 22: { // I->V no Occ
+                Vquery = "deathCount=deathCount+1, deathICount=deathICount+1, bails=bails+1";
+                vehicleTotalDeathObject.deathICount = 1;
+                vehicleTotalDeathObject.bails = 1;
+                vehiclePlayerDeathObject.deathICount = 1;
+                vehiclePlayerDeathObject.bails = 1;
+                break;
+            }
+            case 3: { // V->I
+                Kquery = "killCount=killCount+1, killICount=killICount+1";
+                vehicleTotalKillObject.killICount = 1;
+                vehiclePlayerKillObject.killICount = 1;
+                break;
+            }
+        }
+
+        if (kID !== 0) {
+            // Killer Vehicle
+            dbQuery("UPDATE ws_vehicles_totals SET "+Kquery+" WHERE vehicleID = "+kID+" AND resultID = "+resultID, function(result) {
+                if (result.affectedRows === 0) { // If no update happened, try again
+                    dbQueryParameter("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalKillObject, function() {
+                        if (config.debug.vehicles === true) {
+                            console.log("Inserted New Attacker Vehicle Total Record for alert #" + resultID);
+                        }
+                    });
+                }
+            });
+
+            dbQuery("UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID, function(result) {
+                if (result.affectedRows === 0) { // If no update happened, must be an insert
+                    dbQueryParameter("INSERT INTO ws_vehicles SET ?", vehiclePlayerKillObject, function() {
+                        if (config.debug.vehicles === true) {
+                            console.log("Inserted New Attacker Vehicle Total Record for alert #" + resultID);
+                        }
+                    });
+                }
+                var toSend = {
+                    vehicleID: kID,
+                    type: 'kill',
+                    iMetric: vehicleTotalKillObject.killICount,
+                    vMetric: vehicleTotalKillObject.killVCount,
+                    resultID: resultID
+                };
+
+                sendResult("vehicleCombat", toSend, resultID);
+            });
+        }
+
+        if (vID !== 0) {
+            // Victim Vehicle
+            dbQuery("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, function(result) {
+                if (result.affectedRows === 0) { // If no update happened, must be an insert
+                    dbQueryParameter("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalDeathObject, function() {
+                        if (config.debug.vehicles === true) {
+                            console.log("Inserting New Victim Vehicle Total Record fort alert #" + resultID);
+                            console.log(vID);
+                            console.log(resultID);
+                        }
+                    });
+                }
+            });
+
+            dbQuery("UPDATE ws_vehicles SET "+Vquery+" WHERE resultID = "+resultID+" AND playerID='"+victimID+"' AND vehicleID="+vID, function(result) {
+                if (result.affectedRows === 0) { // If no update happened, must be an insert
+                    dbQueryParameter("INSERT INTO ws_vehicles SET ?", vehiclePlayerDeathObject, function() {
+                        if (config.debug.vehicles === true) {
+                            console.log("Inserting New Victim Vehicle Record fort alert #" + resultID);
+                            console.log(vID);
+                            console.log(resultID);
+                        }
+                    });
+                }
+                var toSend = {
+                    vehicleID: vID,
+                    type: 'death',
+                    iMetric: vehiclePlayerDeathObject.deathICount,
+                    vMetric: vehiclePlayerDeathObject.deathVCount,
+                    bail: vehiclePlayerDeathObject.bails,
+                    nanites: nanites,
+                    resultID: resultID
+                };
+
+                sendResult("vehicleCombat", toSend, resultID);
+            });
+        }
     }
 }
 
@@ -4447,7 +3370,7 @@ function insertInitialMapData(data, callback)
 
     var apiNamespace = "ps2:v2";
 
-    if(worldID >= 2000) {
+    if (worldID >= 2000) {
         apiNamespace = "ps2ps4eu:v2";
     } else if (worldID >= 1000) {
         apiNamespace = "ps2ps4us:v2";
@@ -4474,97 +3397,70 @@ function insertInitialMapData(data, callback)
             var success = 1;
             var json;
 
-            try
-            {
+            try {
                 json = JSON.parse(body);
             }
-            catch(exception)
-            {
+            catch(exception) {
                 console.log(critical("BAD RETURN FROM CENSUS - Map Initial"));
                 console.log(url);
                 console.log(body);
                 success = 0;
             }
 
-            if (success === 1)
-            {
+            if (success === 1) {
                 console.log(json);
                 var mapData = json["map_list"][0]["Regions"]["Row"];
 
-                cachePool.getConnection(function(err, dbMapInsertCache)
-                {
-                    if (err)
-                    {
-                        throw (err);
-                    }
+                dbQuery("SELECT * FROM facility_data WHERE zone = "+zoneID, 'cache', function(data) {
+                    var facData = {};
 
-                    dbMapInsertCache.query("SELECT * FROM facility_data WHERE zone = "+zoneID, function(err, data)
-                    {
-                        dbMapInsertCache.release();
-                        if (err) { throw(err); }
+                    if (data[0] !== undefined) { // If someone came back
 
-                        var facData = {};
+                        for (var i = data.length - 1; i >= 0; i--) {
 
-                        if (data[0] !== undefined) { // If someone came back
+                            var facilityMapID = data[i].facilityMapID;
 
-                            for (var i = data.length - 1; i >= 0; i--) {
-
-                                var facilityMapID = data[i].facilityMapID;
-
-                                facData[facilityMapID] = {
-                                    "facilityID": data[i].facilityID,
-                                    "facilityName": data[i].facilityName,
-                                    "facilityType": data[i].facilityType,
-                                    "zone": data[i].zone,
-                                    "facilityMapID": data[i].facilityMapID
-                                };
-                            }
-
-                            pool.getConnection(function(err, dbMapInsert)
-                            {
-                                if(err) { throw (err); }
-
-                                Object.keys(mapData).forEach(function(key) {
-
-                                    var facilityMapID = mapData[key]["RowData"].RegionId;
-
-                                    var facilityData = facData[facilityMapID];
-
-                                    var object = {
-                                        worldID: worldID,
-                                        zoneID: zoneID,
-                                        facilityID: facilityData.facilityID,
-                                        facilityTypeID: facilityData.facilityType,
-                                        facilityOwner: mapData[key]["RowData"].FactionId,
-                                        resultID: resultID
-                                    };
-
-                                    dbMapInsert.query("INSERT INTO ws_map_initial SET ?", object, function(err) {
-                                        if (err) { throw(err); }
-                                    });
-                                });
-
-                                console.log("INSERTED MAP DATA FOR ALERT: #"+resultID);
-
-                                dbMapInsert.release();
-                            });
-                        } else {
-                            reportError("No supplimental data returned!", "Insert Initial Map Data");
+                            facData[facilityMapID] = {
+                                "facilityID": data[i].facilityID,
+                                "facilityName": data[i].facilityName,
+                                "facilityType": data[i].facilityType,
+                                "zone": data[i].zone,
+                                "facilityMapID": data[i].facilityMapID
+                            };
                         }
-                    });
+
+                        Object.keys(mapData).forEach(function(key) {
+
+                            var facilityMapID = mapData[key]["RowData"].RegionId;
+                            var facilityData = facData[facilityMapID];
+
+                            var object = {
+                                worldID: worldID,
+                                zoneID: zoneID,
+                                facilityID: facilityData.facilityID,
+                                facilityTypeID: facilityData.facilityType,
+                                facilityOwner: mapData[key]["RowData"].FactionId,
+                                resultID: resultID
+                            };
+
+                            dbQueryParameter("INSERT INTO ws_map_initial SET ?", object, function() {
+                                console.log("INSERTED MAP DATA FOR ALERT: #"+resultID);
+                            });
+                        });
+                    } else {
+                        reportError("No supplemental data returned!", "Insert Initial Map Data");
+                    }
                 });
             }
 
-            var statusMessage =
-            {
+            var statusMessage = {
                 type: "map",
                 id: resultID
             };
 
             sendAdmins("eventStatus", statusMessage);
 
-            var resultMessage =
-            {
+            var resultMessage = {
                 id: resultID
             };
 
@@ -4586,54 +3482,41 @@ function checkInstances(callback)
     var time = new Date().getTime();
     time = parseInt(time / 1000); // To convert to seconds
 
-    pool.getConnection(function(poolErr, dbConnection)
-    {
-        Object.keys(instances).forEach(function(key)
-        {
-            var world = instances[key].world;
-            var zone = instances[key].zone;
-            var overtime = instances[key].endTime + 10; // If end + 10 seconds
+    console.log(instances);
 
-            // See if the alert is overdue
-            if (time > overtime) // If overdue
-            {
-                var resultID = instances[key].resultID;
+    Object.keys(instances).forEach(function(key) {
+        var world = instances[key].world;
+        var zone = instances[key].zone;
+        var overtime = instances[key].endTime + 10; // If end + 10 seconds
+        console.log('Time', time);
+        console.log('Overtime', overtime);
 
-                console.log(critical("====================== ALERT #"+resultID+" OVERDUE!!!====================="));
-                console.log("CHECKING TIME: "+time);
-                console.log("RESULT TIME: "+instances[key].endTime); // Alert Time
+        // See if the alert is overdue
+        if (time > overtime) { // If overdue
+            var resultID = instances[key].resultID;
 
-                var endmessage = // Fake the end message
-                {
-                    world_id: world,
-                    zone_id: zone,
-                    start_time: instances[key].startTime, // Needed for subscriptions
-                    end_time: instances[key].endTime
-                };
+            console.log(critical("====================== ALERT #"+resultID+" OVERDUE!!!====================="));
+            console.log("CHECKING TIME: "+time);
+            console.log("RESULT TIME: "+instances[key].endTime); // Alert Time
 
-                forcedEndings++;
+            var endmessage = {// Fake the end message
+                world_id: world,
+                zone_id: zone,
+                start_time: instances[key].startTime, // Needed for subscriptions
+                end_time: instances[key].endTime
+            };
 
-                if (config.debug.metagame === true)
-                {
-                    console.log(endmessage);
-                }
+            forcedEndings++;
 
-                endAlert(endmessage, resultID, dbConnection, function(resultID)
-                {
-                    console.log(critical("FORCFULLY ENDED ALERT #"+resultID+" W: "+world+" - Z:"+zone));
-                    reportError("Forced Ended alert #"+resultID, "Check Instances");
-                });
+            if (config.debug.metagame === true) {
+                console.log(endmessage);
             }
 
-            dbConnection.query("SELECT * FROM ws_map_initial WHERE resultID = "+instances[key].resultID, function(error)
-            {
-                if (error)
-                {
-                    throw(error);
-                }
+            endAlert(endmessage, resultID, function(resultID) {
+                console.log(critical("FORCEFULLY ENDED ALERT #"+resultID+" W: "+world+" - Z:"+zone));
+                reportError("Forced Ended alert #"+resultID, "Check Instances");
             });
-        });
-        dbConnection.release();
+        }
     });
 
     callback();
@@ -4656,12 +3539,12 @@ function fireSubscriptions(message, resultID, mode, event)
 {
     var world = String(message.world_id);
 
-    if (config.toggles.combat === true)
-    {
+    if (config.toggles.combat === true) {
         var combatMessage = '{"action":"'+mode+'","event":"Combat","worlds":["'+world+'"]}';
         //var combatMessage = '{"action":"'+mode+'","event":"Combat","worlds":["'+world+'"],"zones":["'+zone+'"]}';
 
         console.log(success(combatMessage));
+
         try {
             client.send(combatMessage);
         } catch (e) {
@@ -4671,8 +3554,7 @@ function fireSubscriptions(message, resultID, mode, event)
         }
     }
 
-    if (config.toggles.vehicledestroy === true)
-    {
+    if (config.toggles.vehicledestroy === true) {
         var vehicleCombatMessage = '{"action":"'+mode+'","event":"VehicleDestroy","worlds":["'+world+'"]}';
         //var vehicleCombatMessage = '{"action":"'+mode+'","event":"VehicleDestroy","worlds":["'+world+'"],"zones":["'+zone+'"]}';
 
@@ -4687,8 +3569,7 @@ function fireSubscriptions(message, resultID, mode, event)
         }
     }
 
-    if (config.toggles.facilitycontrol === true)
-    {
+    if (config.toggles.facilitycontrol === true) {
         var facilityMessage = '{"action":"'+mode+'","event":"FacilityControl","worlds":["'+world+'"]}';
         //var facilityMessage = '{"action":"'+mode+'","event":"FacilityControl","worlds":["'+world+'"],"zones":["'+zone+'"]}';
 
@@ -4705,8 +3586,7 @@ function fireSubscriptions(message, resultID, mode, event)
 
     // Pop message moved to global scope.
 
-    if (config.toggles.xpmessage === true)
-    {
+    if (config.toggles.xpmessage === true) {
         var xpMessage = '{"action":"'+mode+'","event":"ExperienceEarned","worlds":["'+world+'"]}';
         //var xpMessage = '{"action":"'+mode+'","event":"ExperienceEarned","worlds":["'+world+'"],"zones":["'+zone+'"]}';
 
@@ -4721,8 +3601,7 @@ function fireSubscriptions(message, resultID, mode, event)
         }
     }
 
-    if (config.toggles.achievements === true)
-    {
+    if (config.toggles.achievements === true) {
         var achievementMessage = '{"action":"'+mode+'","event":"AchievementEarned","worlds":["'+world+'"]}';
         //var achievementMessage = '{"action":"'+mode+'","event":"AchievementEarned","worlds":["'+world+'"],"zones":["'+zone+'"]}';
 
@@ -4737,16 +3616,14 @@ function fireSubscriptions(message, resultID, mode, event)
         }
     }
 
-    if (event !== true)
-    {
+    if (event !== true) {
         setInstances(message, resultID, mode);
     }
 }
 
 function setInstances(message, resultID, mode)
 {
-    if (mode === "subscribe")
-    {
+    if (mode === "subscribe") {
         instances[resultID] = {
             status:     true,
             resultID:   resultID,
@@ -4765,26 +3642,17 @@ function setInstances(message, resultID, mode)
     }
 }
 
-function restoreSubs(dbConnectionI, callback)
+function restoreSubs(callback)
 {
     instances = {}; // Clear object if reconnected or being rebuilt
 
-    dbConnectionI.query('SELECT * FROM ws_instances', function(err, resultInstance)
-    {
+    dbQuery('SELECT * FROM ws_instances', function(resultInstance) {
         console.log("INITIAL INSTANCE QUERY FIRED");
-
-        if(err)
-        {
-            reportError(err, "Select Initial Actives");
-            throw (err);
-        }
 
         var time = new Date().getTime() / 1000;
 
-        for (var i = 0; i < resultInstance.length; i++) // Loop through result array
-        {
-            if (resultInstance[i].started < time) // If it requires a subscription now
-            {
+        for (var i = 0; i < resultInstance.length; i++) { // Loop through result array
+            if (resultInstance[i].started < time) { // If it requires a subscription now
                 var resultID   = parseInt(resultInstance[i].resultID);
 
                 var message = {
@@ -4802,9 +3670,7 @@ function restoreSubs(dbConnectionI, callback)
                 // Fake the message to send to the subscriptions function
 
                 fireSubscriptions(message, resultID, "subscribe");
-            }
-            else
-            {
+            } else {
                 console.log(critical("Not firing subscription, before start of event."));
             }
         }
@@ -4821,45 +3687,27 @@ function generate_weapons(callback)
 {
     console.log("GENERATING WEAPONS!");
 
-    cachePool.getConnection(function(poolErr, dbConnectionW)
-    {
-        if (poolErr)
-        {
-            throw(poolErr);
+    dbQuery("SELECT * FROM weapon_data", 'cache', function(result) {
+        var weaponFilterMap = {};
+
+        for (var i = result.length - 1; i >= 0; i--) {
+            //console.log(result[i]);
+            var weapon = result[i];
+
+            if (weaponFilterMap.hasOwnProperty(weapon.weaponName)) {
+                weaponMap[weapon.weaponID] = {"id": weaponFilterMap[weapon.weaponName]};
+            } else {
+                weaponFilterMap[weapon.weaponName] = weapon.weaponID;
+                weaponMap[weapon.weaponID] = {"id": weapon.weaponID};
+            }
         }
 
-        dbConnectionW.query("SELECT * FROM weapon_data", function(err, result)
-        {
-            if (err)
-            {
-                throw(err);
-            }
-            else
-            {
-                dbConnectionW.release();
+        // Use the map to find a group
+        //console.log("%j", weaponMap);
 
-                var weaponFilterMap = {};
+        //console.log("Looking for weapon id 1 %j", weaponMap[1]);
 
-                for (var i = result.length - 1; i >= 0; i--)
-                {
-                    //console.log(result[i]);
-                    var weapon = result[i];
-                    if (weaponFilterMap.hasOwnProperty(weapon.weaponName)) {
-                        weaponMap[weapon.weaponID] = {"id": weaponFilterMap[weapon.weaponName]};
-                    } else {
-                        weaponFilterMap[weapon.weaponName] = weapon.weaponID;
-                        weaponMap[weapon.weaponID] = {"id": weapon.weaponID};
-                    }
-                }
-
-                // Use the map to find a group
-                //console.log("%j", weaponMap);
-
-                //console.log("Looking for weapon id 1 %j", weaponMap[1]);
-
-                callback();
-            }
-        });
+        callback();
     });
 }
 
@@ -4870,114 +3718,40 @@ function combatHistory() // Called by generateActives function to log active ale
     var time = date.getTime();
     time = time / 1000; // Convert to websocket / PHP times
 
-    if (messagesRecieved > 1)
-    {
+    if (messagesRecieved > 1) {
         console.log(success("=========== GENERATING COMBAT HISTORY ==============="));
 
-        pool.getConnection(function(poolErr, dbConnectionH)
-        {
-            if (poolErr)
-            {
-                throw(poolErr);
-            }
+        Object.keys(instances).forEach(function(key) {
+            var resultID = instances[key].resultID;
 
-            Object.keys(instances).forEach(function(key)
-            {
-                var resultID = instances[key].resultID;
+            dbQuery("SELECT * FROM ws_factions WHERE resultID="+resultID, function(result) {
+                if (result[0]) { // If got a record
+                    var total = parseInt(result[0].killsVS + result[0].killsNC + result[0].killsTR);
 
-                dbConnectionH.query("SELECT * FROM ws_factions WHERE resultID="+resultID, function(err, result)
-                {
-                    if (result[0]) // If got a record
-                    {
-                        var total = parseInt(result[0].killsVS + result[0].killsNC + result[0].killsTR);
+                    if (total !== 0) {
+                        var post = {
+                            resultID: resultID,
+                            timestamp: time,
+                            killsVS: result[0].killsVS,
+                            killsNC: result[0].killsNC,
+                            killsTR: result[0].killsTR
+                        };
 
-                        if (total !== 0)
-                        {
-                            var post =
-                            {
-                                resultID: resultID,
-                                timestamp: time,
-                                killsVS: result[0].killsVS,
-                                killsNC: result[0].killsNC,
-                                killsTR: result[0].killsTR
-                            };
+                        sendResult("combatHistory", post, resultID);
 
-                            sendResult("combatHistory", post, resultID);
-
-                            dbConnectionH.query("INSERT INTO ws_combat_history SET ?", post, function(err)
-                            {
-                                if (err)
-                                {
-                                    if (err.errno !== 1213 && err.errno !== 1062) // If a deadlock or a duplicate
-                                    {
-                                        reportError(err, "Insert Combat Record");
-                                    }
-                                }
-
-                                if (config.debug.status === true)
-                                {
+                        dbQueryParameter("INSERT INTO ws_combat_history SET ?", post, function() {
+                            if (config.debug.status === true) {
                                 console.log(success("Inserted Combat History for Alert #"+resultID));
-                                }
-                            });
-                        }
+                            }
+                        });
                     }
-                    else
-                    {
-                    console.log(critical("UNABLE TO RETRIEVE KILL COMBAT HISTORY FOR ALERT #"+resultID));
-                    }
-                });
+                } else {
+                console.log(critical("UNABLE TO RETRIEVE KILL COMBAT HISTORY FOR ALERT #"+resultID));
+                }
             });
-
-            console.log(notice("Combat History Logged - "+date));
-
-            dbConnectionH.release();
         });
-    }
-}
 
-function handleDeadlock(query, location, tries)
-{
-    tries = tries++;
-
-    if (tries < 20)
-    {
-        var rand = Math.random() * (1000 - 250) + 250;
-
-        setTimeout(function()
-        {
-            pool.getConnection(function(poolErr, dbConnectionLoop)
-            {
-                dbConnectionLoop.query(query, function(err, result)
-                {
-                    if (err)
-                    {
-                        if (err.errno === 1213) // If deadlock
-                        {
-                            handleDeadlock(query, location, tries); // Call upon itself to try again.
-                        }
-                    }
-
-                    if (result)
-                    {
-                        if (result.affectedRows > 0 && config.debug.deadlocks === true)
-                        {
-                            console.log(warning("Deadlock / Duplicate handled! Location: "+location));
-                        }
-                    }
-                    else
-                    {
-                        reportError(query, "ERROR HANDLING DEADLOCK @ LOCATION: "+location);
-                        console.log(query);
-                    }
-                    dbConnectionLoop.release();
-                });
-            });
-        }, rand);
-    }
-    else
-    {
-        console.log(critical("DEADLOCK WAS HANDLED, BUT ERRORED."));
-        console.log(critical("LOCATION: "+location));
+        console.log(notice("Combat History Logged - "+date));
     }
 }
 
@@ -5040,98 +3814,78 @@ FacilityMessage:
 
 var messagesDuplicates = {};
 
-setInterval(function()
-{
+setInterval(function() {
     messagesDuplicates = {};
 }, 2000);
 
 function checkDuplicateMessages(message, callback)
 {
-    if (config.debug.duplicates)
-    {
+    if (config.debug.duplicates) {
         console.log(warning("CHECKING FOR DUPLICATES START"));
         console.log(warning(JSON.stringify(message, null, 4)));
     }
 
-    if (messagesDuplicates["Combat"] === undefined)
-    {
+    if (messagesDuplicates["Combat"] === undefined) {
         messagesDuplicates["Combat"] = {};
     }
-    if (messagesDuplicates["FacilityControl"] === undefined)
-    {
+    if (messagesDuplicates["FacilityControl"] === undefined) {
         messagesDuplicates["FacilityControl"] = {};
     }
-    if (messagesDuplicates["VehicleDestroy"] === undefined)
-    {
+    if (messagesDuplicates["VehicleDestroy"] === undefined) {
         messagesDuplicates["VehicleDestroy"] = {};
     }
-    if (messagesDuplicates["MetagameEvent"] === undefined)
-    {
+    if (messagesDuplicates["MetagameEvent"] === undefined) {
         messagesDuplicates["MetagameEvent"] = {};
     }
-    if (messagesDuplicates["ExperienceEarned"] === undefined)
-    {
+    if (messagesDuplicates["ExperienceEarned"] === undefined) {
         messagesDuplicates["ExperienceEarned"] = {};
     }
-    if (messagesDuplicates["AchievementEarned"] === undefined)
-    {
+    if (messagesDuplicates["AchievementEarned"] === undefined) {
         messagesDuplicates["AchievementEarned"] = {};
     }
-    if (messagesDuplicates["PopulationChange"] === undefined)
-    {
+    if (messagesDuplicates["PopulationChange"] === undefined) {
         messagesDuplicates["PopulationChange"] = {};
     }
 
-    if (message.event_type !== undefined)
-    {
+    if (message.event_type !== undefined) {
         var eventType = message.event_type;
         var timestamp = parseInt(message.payload.timestamp);
 
-        if (config.debug.duplicates === true)
-        {
+        if (config.debug.duplicates === true) {
             console.log(warning("CHECKING FOR DUPLICATES"));
         }
 
         var status = false; // Duplicate unless proven otherwise
 
-        if (eventType === "Combat")
-        {
+        if (eventType === "Combat") {
             var victimID = message.payload.victim_character_id;
 
-            if (config.debug.duplicates === true)
-            {
+            if (config.debug.duplicates === true) {
                 console.log(warning("Checking Victim: "+victimID+" for duplicates"));
             }
 
-            if (messagesDuplicates.Combat[victimID] === undefined)
-            {
-                messagesDuplicates.Combat[victimID] =
-                {
+            if (messagesDuplicates.Combat[victimID] === undefined) {
+                messagesDuplicates.Combat[victimID] = {
                     timestamp: timestamp
                 };
 
                 status = true;
-            }
-            else if (messagesDuplicates.Combat[victimID].timestamp === timestamp) // If a duplicate based off timestamp
-            {
+            } else if (messagesDuplicates.Combat[victimID].timestamp === timestamp) { // If a duplicate based off timestamp
                 status = false;
             }
         }
-        else if (eventType === "FacilityControl")
-        {
+        else if (eventType === "FacilityControl") {
             var facilityID = message.payload.facility_id;
             var blockUpdate = message.payload.is_block_update;
 
-            if (config.debug.duplicates === true)
-            {
+            if (config.debug.duplicates === true) {
                 console.log(warning("Checking Facility: "+facilityID+" for duplicates"));
             }
 
             if (blockUpdate === "1") {
                 status = true;
             } else {
-                if (messagesDuplicates.FacilityControl[facilityID] === undefined)
-                {
+                if (messagesDuplicates.FacilityControl[facilityID] === undefined) {
                     messagesDuplicates.FacilityControl[facilityID] =
                     {
                         timestamp: timestamp
@@ -5139,8 +3893,7 @@ function checkDuplicateMessages(message, callback)
 
                     status = true;
                 }
-                else if (messagesDuplicates.FacilityControl[facilityID].timestamp === timestamp) // If a duplicate based off timestamp
-                {
+                else if (messagesDuplicates.FacilityControl[facilityID].timestamp === timestamp) { // If a duplicate based off timestamp
                     status = false;
                 }
             }
@@ -5149,48 +3902,37 @@ function checkDuplicateMessages(message, callback)
         {
             var victimID = message.payload.victim_character_id;
 
-            if (config.debug.duplicates === true)
-            {
+            if (config.debug.duplicates === true) {
                 console.log(warning("Checking Vehicle Victim: "+victimID+" for duplicates"));
             }
 
-            if (messagesDuplicates.VehicleDestroy[victimID] === undefined)
-            {
-                messagesDuplicates.VehicleDestroy[victimID] =
-                {
+            if (messagesDuplicates.VehicleDestroy[victimID] === undefined) {
+                messagesDuplicates.VehicleDestroy[victimID] = {
                     timestamp: timestamp
                 };
 
                 status = true;
             }
-            else if (messagesDuplicates.VehicleDestroy[victimID].timestamp === timestamp) // If a duplicate based off timestamp
-            {
+            else if (messagesDuplicates.VehicleDestroy[victimID].timestamp === timestamp) { // If a duplicate based off timestamp
                 status = false;
             }
         }
-        else if (eventType === "MetagameEvent")
-        {
+        else if (eventType === "MetagameEvent") {
             status = true;
         }
-        else if (eventType === "ExperienceEarned")
-        {
+        else if (eventType === "ExperienceEarned") {
             status = true;
         }
-        else if (eventType === "AchievementEarned")
-        {
+        else if (eventType === "AchievementEarned") {
             status = true;
         }
-        else if (eventType === "PopulationChange")
-        {
+        else if (eventType === "PopulationChange") {
             status = true;
         }
-        else if (eventType === "ServiceStateChange")
-        {
+        else if (eventType === "ServiceStateChange") {
             status = true;
         }
-    }
-    else // If the message doesn't have an event type, let it through.
-    {
+    } else { // If the message doesn't have an event type, let it through.
         status = true;
     }
 
@@ -5199,10 +3941,10 @@ function checkDuplicateMessages(message, callback)
 
 function calcEndTime(started, type) // Calculates estimated end time of an alert based off type and start time
 {
+    started = parseInt(started);
     var toAdd = 0;
 
-    switch(type)
-    {
+    switch(type) {
         case 1:
         case 2:
         case 3:
@@ -5221,9 +3963,10 @@ function calcEndTime(started, type) // Calculates estimated end time of an alert
         case 131:
         case 132:
         case 133:
-        case 134:
+        case 134: {
             toAdd = 2700;
             break;
+        }
     }
 
     return started + toAdd;
@@ -5252,7 +3995,6 @@ if (config.toggles.https) {
     wss = new WebSocket.Server({
         server: server
     });
-
 } else {
     var WebSocketServer = require('ws').Server;
 
@@ -5262,296 +4004,217 @@ if (config.toggles.https) {
     });
 }
 
-wss.on('connection', function(clientConnection)
-{
-    if (config.debug.clients === true)
-    {
+wss.on('connection', function(clientConnection) {
+    if (config.debug.clients === true) {
         console.log("Processing incoming connection");
     }
 
     var apiKey = url.parse(clientConnection.upgradeReq.url, true).query.apikey;
 
-    checkAPIKey(apiKey, function(isValid, username, admin)
-    {
-        if (config.debug.auth === true)
-        {
+    checkAPIKey(apiKey, function(isValid, username, admin) {
+        if (config.debug.auth === true) {
             console.log("API Check Result: "+isValid);
         }
 
-        if(isValid)
-        {
-            // Store a reference to the connection using an incrementing ID
-            clientConnection.id = connectionIDCounter++;
-
-            //Add to tracked client connections.
-            clientConnections[clientConnection.id] = clientConnection;
-
-            var message =
-            {
-                state: connectionState,
-                admin: admin,
-                response: 'auth'
-            };
-
-            clientConnection.send(JSON.stringify(message));
-
-            if (config.debug.clients === true)
-            {
-                console.log(success("Websocket Connected - TOTAL: "+Object.keys(clientConnections).length));
-                console.log((new Date()) + ' User ' + username + ' connected. API Key: ' + apiKey);
-            }
-
-            if (admin === true)
-            {
-                if (config.debug.admin === true)
-                {
-                    console.log(success("Admin successfully authenticated!"));
-                }
-
-                clientAdminConnections[clientConnection.id] = clientConnection; // Subscribe admin to admin object
-            }
-
-            clientConnection.on('message', function(message)
-            {
-                try // Check if the message we get is valid json.
-                {
-                    var JSON = JSON.parse(message); //Messages Received From Census are Formated in JSON. Parse it, and you'll be able to access the data the same as a JSON object.
-                    message = JSON.payload;
-                }
-                catch(exception)
-                {
-                    console.log(message);
-                    console.log(critical("INVALID JSON RECEIVED"));
-
-                    clientConnection.send('{"response":"Invalid Input"}');
-                    message = null;
-                }
-
-                if (message) // If valid
-                {
-                    if (message.action === "subscribe") // Subscribe to result
-                    {
-                        var resultID = message.resultID;
-
-                        if (!resultSubscriptions[resultID])
-                        {
-                            resultSubscriptions[resultID] = {};
-
-                            resultSubscriptions[resultID][clientConnection.id] = clientConnection;
-                        }
-                        else
-                        {
-                            resultSubscriptions[resultID][clientConnection.id] = clientConnection; // Put connection based on resultID into object to loop through
-                        }
-
-                        if (config.debug.clients === true)
-                        {
-                            console.log(success("SUBSCRIBED WEBSOCKET TO ALERT #"+resultID));
-                        }
-
-                        clientConnection.send('{"messageType": "subscribed"}');
-                    }
-                    else if (message.action === 'subscribe-world') {
-                        console.log('Subscribing to world messages');
-                        var worldID = message.worldID;
-                        
-                        if (!clientWorldDebugConnections[worldID])
-                        {
-                            clientWorldDebugConnections[worldID] = {};
-
-                            clientWorldDebugConnections[worldID][clientConnection.id] = clientConnection;
-                        }
-                        else
-                        {
-                            clientWorldDebugConnections[worldID][clientConnection.id] = clientConnection; // Put connection based on worldID into object to loop through
-                        }
-
-                        if (config.debug.clients === true)
-                        {
-                            console.log(success("SUBSCRIBED WEBSOCKET TO WORLD #"+worldID));
-                        }
-                        
-                        clientConnection.send('{"messageType": "subscribed"}');
-                    }
-                    else if (message.action === "timesync")
-                    {
-                        var clientTime = Math.floor(message.time);
-                        var resultID = message.resultID;
-                        var mode = message.mode;
-
-                        if (config.debug.time === true)
-                        {
-                            console.log(notice("Time message recieved:"));
-                            console.log(message);
-                        }
-
-                        if (instances[resultID]) // On first load stuff, prevent crash
-                        {
-                            if (config.debug.time === true)
-                            {
-                                console.log(critical("REQUESTED INSTANCE:"));
-                                console.log(instances[resultID]);
-                            }
-
-                            var serverTime = new Date().getTime();
-                            serverTime = Math.floor(serverTime / 1000);
-
-                            if (config.debug.time === true)
-                            {
-                                console.log("SERVER TIME: "+serverTime);
-                            }
-
-                            var diff = ( parseInt(clientTime) - parseInt(serverTime) );
-                            var remaining = 0;
-
-                            if (mode === "start")
-                            {
-                                remaining = parseInt(instances[resultID].startTime) - serverTime;
-                            }
-                            else if (mode === "end")
-                            {
-                                remaining = parseInt(instances[resultID].endTime) - serverTime;
-                            }
-
-                            var correctTime = serverTime + remaining + diff;
-
-                            //console.log(notice("Received Timesync message"));
-
-                            clientConnection.send('{"messageType": "timeSync", "serverTime": '+serverTime+', "clientTime": '+clientTime+', "remaining": '+remaining+', "timediff":'+diff+', "correctTime":'+correctTime+'}');
-
-                            if (config.debug.time === true)
-                            {
-                                console.log(success("SENDING TIME MESSAGE"));
-                            }
-                        }
-                        else
-                        {
-                            if (config.debug.time === true)
-                            {
-                                console.log(critical("SENDING TIMESYNC WAIT MESSAGE"));
-                            }
-
-                            clientConnection.send('{"messageType": "timeSyncWait"}');
-                        }
-                    }
-                    else if (message.action === "alertStatus") // First call for the monitor
-                    {
-                        var messageToSendMonitor = {};
-
-                        messageToSendMonitor.messageType = "alertStatus";
-
-                        var activeAlertsReply = {};
-
-                        var serverTime = new Date().getTime();
-                        serverTime = Math.floor(serverTime / 1000);
-
-                        Object.keys(instances).forEach(function(key)
-                        {
-                            var world = instances[key]['world'];
-                            var zone = instances[key]['zone'];
-
-                            if(instances[key].status === true) // If there's an active alert
-                            {
-                                if (!activeAlertsReply[world])
-                                {
-                                    activeAlertsReply[world] = {};
-                                }
-
-                                activeAlertsReply[world][zone] = {};
-                                activeAlertsReply[world][zone] = instances[key];
-
-                                remaining = parseInt(instances[key].endTime) - serverTime;
-
-                                activeAlertsReply[world][zone].remaining = remaining;
-                                activeAlertsReply[world][zone].serverTime = serverTime;
-                            }
-                        });
-
-                        messageToSendMonitor.data = activeAlertsReply;
-
-                        clientConnection.send(JSON.stringify(messageToSendMonitor));
-
-                        if (config.debug.clients === true)
-                        {
-                            console.log(messageToSendMonitor);
-                            console.log("SENT WEBSOCKET MONITOR CURRENT STATUS");
-                        }
-                    }
-
-                    /*else if (message.action == "unsubscribe") // unSubscribe from result
-                    {
-                        console.log(resultSubscriptions);
-                        var resultID = message.resultID;
-
-                        if (resultSubscriptions[resultID][clientConnection.id])
-                        {
-                            delete resultSubscriptions[resultID][clientConnection.id]; // Put connection based on resultID into object to loop through
-                        }
-
-                        console.log(success("UNSUBSCRIBED WEBSOCKET FROM ALERT #"+resultID));
-
-                        clientConnection.send('{"response":"Unsubscribed"}');
-                    }*/
-
-                    // ADMIN FUNCTIONS //
-
-                    else if (message.type === "subscribePerf" && admin === true) // Admin functions
-                    {
-                        clientAdminPerfConnections[clientConnection.id] = clientConnection;
-                    }
-                    else if (message.type === "reloadPages" && admin === true)
-                    {
-                        sendResult("reload", "reload", message.resultID);
-                    }
-                    else if (message.action === "middlemanStatus")
-                    {
-                        console.log("Received middleman status request");
-
-                        var json = {
-                            messageType: "middlemanStatus",
-                            value: connectionState
-                        };
-
-                        clientConnection.send(JSON.stringify(json));
-                    }
-                    
-
-                    // End of message actions
-                }
-            }); // End of clientOnMessage
-        } // End of API Key if
-        else // If API key is not valid or not authorised
-        {
-            if (apiKey !== undefined)
-            {
+        if (!isValid) { // If API key is not valid or not authorised
+            if (apiKey !== undefined) {
                 console.log(critical("UNAUTHORISED API KEY ATTEMPT! "+apiKey));
                 console.log(critical(JSON.stringify(message, null, 4)));
             }
-            else
-            {
-                if (config.debug.auth === true)
-                {
-                    console.log(critical("INVALID API KEY FORMAT DETECTED."));
-                    console.log(critical("API KEY: "+apiKey));
-                }
+            else if (config.debug.auth === true) {
+                console.log(critical("INVALID API KEY FORMAT DETECTED."));
+                console.log(critical("API KEY: "+apiKey));
             }
 
             clientConnection.close();
+            return;
         }
 
-        clientConnection.on('close', function()
-        {
+        // Store a reference to the connection using an incrementing ID
+        clientConnection.id = connectionIDCounter++;
+
+        //Add to tracked client connections.
+        clientConnections[clientConnection.id] = clientConnection;
+
+        var message = {
+            state: connectionState,
+            admin: admin,
+            response: 'auth'
+        };
+
+        clientConnection.send(JSON.stringify(message));
+
+        if (config.debug.clients === true) {
+            console.log(success("Websocket Connected - TOTAL: "+Object.keys(clientConnections).length));
+            console.log((new Date()) + ' User ' + username + ' connected. API Key: ' + apiKey);
+        }
+
+        if (admin === true) {
+            if (config.debug.admin === true) {
+                console.log(success("Admin successfully authenticated!"));
+            }
+
+            clientAdminConnections[clientConnection.id] = clientConnection; // Subscribe admin to admin object
+        }
+
+        clientConnection.on('message', function(message) {
+            try { // Check if the message we get is valid json.
+                var JSON = JSON.parse(message); //Messages Received From Census are Formated in JSON. Parse it, and you'll be able to access the data the same as a JSON object.
+                message = JSON.payload;
+            }
+            catch (exception) {
+                console.log(message);
+                console.log(critical("INVALID JSON RECEIVED"));
+
+                clientConnection.send('{"response":"Invalid Input"}');
+                message = null;
+            }
+
+            if (!message) {
+                console.log('MESSAGE WAS INVALID!');
+                return;
+            }
+
+            if (message.action === "subscribe") { // Subscribe to result
+                var resultID = message.resultID;
+
+                if (!resultSubscriptions[resultID]) {
+                    resultSubscriptions[resultID] = {};
+                    resultSubscriptions[resultID][clientConnection.id] = clientConnection;
+                } else {
+                    resultSubscriptions[resultID][clientConnection.id] = clientConnection; // Put connection based on resultID into object to loop through
+                }
+
+                if (config.debug.clients === true) {
+                    console.log(success("SUBSCRIBED WEBSOCKET TO ALERT #" + resultID));
+                }
+
+                clientConnection.send('{"messageType": "subscribed"}');
+            } else if (message.action === 'subscribe-world') {
+                console.log('Subscribing to world messages');
+                var worldID = message.worldID;
+
+                if (!clientWorldDebugConnections[worldID]) {
+                    clientWorldDebugConnections[worldID] = {};
+                    clientWorldDebugConnections[worldID][clientConnection.id] = clientConnection;
+                } else {
+                    clientWorldDebugConnections[worldID][clientConnection.id] = clientConnection; // Put connection based on worldID into object to loop through
+                }
+
+                if (config.debug.clients === true) {
+                    console.log(success("SUBSCRIBED WEBSOCKET TO WORLD #" + worldID));
+                }
+
+                clientConnection.send('{"messageType": "subscribed"}');
+            } else if (message.action === "timesync") {
+                var clientTime = Math.floor(message.time);
+                var resultID = message.resultID;
+                var mode = message.mode;
+
+                if (config.debug.time === true) {
+                    console.log(notice("Time message recieved:"));
+                    console.log(message);
+                }
+
+                if (instances[resultID]) { // On first load stuff, prevent crash
+                    if (config.debug.time === true) {
+                        console.log(critical("REQUESTED INSTANCE:"));
+                        console.log(instances[resultID]);
+                    }
+
+                    var serverTime = new Date().getTime();
+                    serverTime = Math.floor(serverTime / 1000);
+
+                    if (config.debug.time === true) {
+                        console.log("SERVER TIME: " + serverTime);
+                    }
+
+                    var diff = ( parseInt(clientTime) - parseInt(serverTime) );
+                    var remaining = 0;
+
+                    if (mode === "start") {
+                        remaining = parseInt(instances[resultID].startTime) - serverTime;
+                    } else if (mode === "end") {
+                        remaining = parseInt(instances[resultID].endTime) - serverTime;
+                    }
+
+                    var correctTime = serverTime + remaining + diff;
+
+                    //console.log(notice("Received Timesync message"));
+
+                    clientConnection.send('{"messageType": "timeSync", "serverTime": ' + serverTime + ', "clientTime": ' + clientTime + ', "remaining": ' + remaining + ', "timediff":' + diff + ', "correctTime":' + correctTime + '}');
+
+                    if (config.debug.time === true) {
+                        console.log(success("SENDING TIME MESSAGE"));
+                    } else if (config.debug.time === true) {
+                        console.log(critical("SENDING TIMESYNC WAIT MESSAGE"));
+                    }
+
+                    clientConnection.send('{"messageType": "timeSyncWait"}');
+                }
+            } else if (message.action === "alertStatus") { // First call for the monitor
+                var messageToSendMonitor = {};
+
+                messageToSendMonitor.messageType = "alertStatus";
+
+                var activeAlertsReply = {};
+
+                var serverTime = new Date().getTime();
+                serverTime = Math.floor(serverTime / 1000);
+
+                Object.keys(instances).forEach(function (key) {
+                    var world = instances[key]['world'];
+                    var zone = instances[key]['zone'];
+
+                    if (instances[key].status === true) { // If there's an active alert
+                        if (!activeAlertsReply[world]) {
+                            activeAlertsReply[world] = {};
+                        }
+
+                        activeAlertsReply[world][zone] = {};
+                        activeAlertsReply[world][zone] = instances[key];
+
+                        remaining = parseInt(instances[key].endTime) - serverTime;
+
+                        activeAlertsReply[world][zone].remaining = remaining;
+                        activeAlertsReply[world][zone].serverTime = serverTime;
+                    }
+                });
+
+                messageToSendMonitor.data = activeAlertsReply;
+
+                clientConnection.send(JSON.stringify(messageToSendMonitor));
+
+                if (config.debug.clients === true) {
+                    console.log(messageToSendMonitor);
+                    console.log("SENT WEBSOCKET MONITOR CURRENT STATUS");
+                }
+            // ADMIN FUNCTIONS //
+            } else if (message.type === "subscribePerf" && admin === true) { // Admin functions
+                clientAdminPerfConnections[clientConnection.id] = clientConnection;
+            } else if (message.type === "reloadPages" && admin === true) {
+                sendResult("reload", "reload", message.resultID);
+            } else if (message.action === "middlemanStatus") {
+                console.log("Received middleman status request");
+
+                var json = {
+                    messageType: "middlemanStatus",
+                    value: connectionState
+                };
+
+                clientConnection.send(JSON.stringify(json));
+            }
+        }); // End of clientOnMessage
+
+        clientConnection.on('close', function() {
             delete clientConnections[clientConnection.id];
 
-            if (clientAdminConnections[clientConnection.id])
-            {
+            if (clientAdminConnections[clientConnection.id]) {
                 delete clientAdminConnections[clientConnection.id];
             }
 
-            if (apiKey !== undefined)
-            {
-                if (config.debug.clients === true)
-                {
+            if (apiKey !== undefined) {
+                if (config.debug.clients === true) {
                     console.log(notice("Websocket connection closed - Total: "+Object.keys(clientConnections).length));
                 }
             }
@@ -5562,18 +4225,16 @@ wss.on('connection', function(clientConnection)
 /**
  * Interval functions which fire maintenance tasks or required operations
  */
-setInterval(function()
-{
+setInterval(function() {
     usage.lookup(pid, function(err, result) {
         perfSecs++;
-        if (result !== undefined)
-        {
+
+        if (result !== undefined) {
             var memory = Math.round(result.memory / 1024 / 1024);
             var cpu = Math.round(result.cpu);
             var conns = Object.keys(clientConnections).length;
 
-            if (config.debug.perf === true && perfSecs === 30)
-            {
+            if (config.debug.perf === true && perfSecs === 30) {
                 console.log(notice("============== PERFORMANCE =============="));
                 console.log("CPU: "+cpu+"% - MEM: "+memory+"MB - Conns: "+conns);
                 console.log(notice("========================================="));
@@ -5581,8 +4242,7 @@ setInterval(function()
                 perfSecs = 0;
             }
 
-            perfStats =
-            {
+            perfStats = {
                 "cpu": cpu,
                 "mem": memory,
                 "conns": conns,
@@ -5606,22 +4266,19 @@ cleanCache();
  * @see cleanCache
  *
  */
-setInterval(function()
-{
+setInterval(function() {
     cleanCache();
 }, 60000);
 
 //Connection Watcher - Reconnects if websocket connection is dropped.
 function conWatcher()
 {
-    if(!wsClient.isConnected())
-    {
+    if(!wsClient.isConnected()) {
         console.log(critical('Reconnecting...'));
 
         var connectionState = 2;
 
-        var message =
-        {
+        var message = {
             state: connectionState,
             admin: false,
             response: 'auth'
@@ -5638,10 +4295,8 @@ function conWatcher()
  */
 function subWatcher()
 {
-    if(wsClient.isConnected())
-    {
-        if (subscriptions === 0) // If the socket doesn't get a response from the API when subscriptions have been sent
-        {
+    if (wsClient.isConnected()) {
+        if (subscriptions === 0) { // If the socket doesn't get a response from the API when subscriptions have been sent
             console.log(critical('SUBSCRIPTIONS NOT PASSED! RECONNECTING...'));
             subscriptionsRetry = 1;
             wsClient = new persistentClient();
@@ -5656,43 +4311,23 @@ function subWatcher()
 function cleanCache()
 {
     console.log(notice("Running cache clean routine"));
-    {
-        cachePool.getConnection(function(err, dbConnectionClean)
-        {
-            if (err)
-            {
-                throw(err);
-            }
+    var expiry = Math.round(new Date().getTime() / 1000);
 
-            var expiry = Math.round(new Date().getTime() / 1000);
+    dbQuery("DELETE FROM outfit_cache WHERE expires <= "+expiry, 'cache', function(result) {
+        console.log("Outfit cache cleaned. Removed: "+result.affectedRows);
+    });
 
-            dbConnectionClean.query("DELETE FROM outfit_cache WHERE expires <= "+expiry, function(err, result)
-            {
-                if (err) { throw(err); }
-
-                console.log("Outfit cache cleaned. Removed: "+result.affectedRows);
-            });
-
-            dbConnectionClean.query("DELETE FROM player_cache WHERE expires <= "+expiry, function(err, result)
-            {
-                if (err) { throw(err); }
-
-                console.log("Player cache cleaned. Removed: "+result.affectedRows);
-            });
-
-            dbConnectionClean.release();
-        });
-    }
+    dbQuery("DELETE FROM player_cache WHERE expires <= "+expiry, 'cache', function(result) {
+        console.log("Player cache cleaned. Removed: "+result.affectedRows);
+    });
 }
 
 var maintInterval;
 
 function setMaintenanceInterval() {
     var maintTimer = 30 * 1000;
-    maintInterval = setInterval(function()
-    {
-        if (config.debug.status === true && messagesRecieved > 5)
-        {
+    maintInterval = setInterval(function() {
+        if (config.debug.status === true && messagesRecieved > 5) {
             console.log(notice("TOTAL MESSAGES RECEIVED (1 min): "+messagesRecieved));
         }
 
@@ -5701,10 +4336,8 @@ function setMaintenanceInterval() {
         messagesRecieved = 0;
         messagesRecievedLast = messagesRecieved;
 
-        checkInstances(function()
-        {
-            if (config.debug.instances === true)
-            {
+        checkInstances(function() {
+            if (config.debug.instances === true) {
                 if (instances.length > 0) {
                     console.log(notice("=========== CURRENT ALERTS IN PROGRESS: ==========="));
 
@@ -5715,19 +4348,13 @@ function setMaintenanceInterval() {
                         console.log('Remaining: ' + instances[i].remaining);
                     });
                 }
-
             }
         });
 
-        pool.getConnection(function(poolErr, dbConnectionMap)
-        {
-            checkMapInitial(dbConnectionMap, function()
-            {
-                if (config.debug.mapinitial === true) {
-                    console.log(notice("Map initial checked"));
-                }
-                dbConnectionMap.release();
-            });
+        checkMapInitial(function() {
+            if (config.debug.mapinitial === true) {
+                console.log(notice("Map initial checked"));
+            }
         });
 
         if (config.toggles.sync === true) {
@@ -5768,7 +4395,6 @@ function processActives(message) {
             Object.keys(instances).forEach(function(w) {
                 console.log(instances[w]);
                 if (instances[w].instanceID === instanceID) {
-
                     if (config.debug.sync === true) {
                         console.log(success("Alert found"));
                         console.log(notice(JSON.stringify(instances[w], null, 4)));
@@ -5790,14 +4416,39 @@ function processActives(message) {
 
                 alert.world_id = world;
 
-                pool.getConnection(function(err, dbConnection) {
-                    insertAlert(alert, dbConnection, function(resultID) {
-                        console.log(success("================ FORCE STARTED NEW ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
-                    });
-
-                    dbConnection.release();
+                insertAlert(alert, function(resultID) {
+                    console.log(success("================ FORCE STARTED NEW ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
                 });
             }
         });
     });
+}
+
+function subscriptionDisplay(content, type, key, json) {
+    if (!subscriptionDisplayContent[type]) {
+        subscriptionDisplayContent[type] = '';
+    }
+
+    if (json) {
+        subscriptionDisplayContent[type][key] = JSON.stringify(content, null, 4) + "\n";
+    } else {
+        subscriptionDisplayContent[type][key] = content + "\n";
+    }
+
+    if (subscriptionDisplayTimeout === null) {
+        subscriptionDisplayTimeout = setTimeout(function() {
+            console.log(notice('==== SUBSCRIPTIONS ===='));
+            Object.keys(subscriptionDisplayContent).forEach(function(type) {
+                console.log(type + " SUBSCRIPTIONS");
+                Object.keys(subscriptionDisplayContent[type]).forEach(function(key) {
+                    console.log(key);
+                    console.log(subscriptionDisplayContent[key]);
+                });
+            });
+            console.log(notice('======================='));
+            clearTimeout(subscriptionDisplayTimeout);
+            subscriptionDisplayTimeout = null;
+            subscriptionDisplayContent = {};
+        }, 2000)
+    }
 }
