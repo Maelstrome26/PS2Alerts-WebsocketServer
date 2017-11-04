@@ -493,8 +493,7 @@ function processMessage(messageData, client)
                                                     console.log(success("================ SUCCESSFULLY ENDED ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
                                                 });
                                             });
-                                        }
-                                        else {
+                                        } else {
                                             reportError("UNDEFINED RESULT ID ALERT END - World: "+world, "End Alert");
                                         }
                                     }
@@ -504,21 +503,18 @@ function processMessage(messageData, client)
                                         }
                                     }
                                 });
-                            }
-                            else {
+                            } else {
                                 console.log(critical("INVALID / UNSUPPORTED ALERT TYPE: "+alertType+" - WORLD: #"+world));
                                 reportError("UNSUPPORTED ALERT TYPE DETECTED: "+alertType, "Insert Alert");
                             }
                         });
-                    }
-                    else {
+                    } else {
                         findResultID(message, eventType, function(resultIDArray) { // Get resultID for all functions
                             if (config.debug.resultID === true && config.debug.jaeger === false) {
                                 if (resultIDArray.length === 0) {
                                     console.log(critical("RESULT ID COULD NOT BE FOUND!"));
                                     console.log(resultIDArray);
-                                }
-                                else {
+                                } else {
                                     console.log(notice("ResultIDs Found:"));
                                     console.log(resultIDArray);
                                 }
@@ -760,12 +756,10 @@ function findResultID(message, eventType, callback)
             if (eventType !== "MetagameEvent" && eventType !== "PopulationChange") {
                 if (startTime < time && endTime > time) { // If message is still within time
                     returnedResults.push(instances[key].resultID);
-                }
-                else if (config.debug.resultID === true) {
+                } else if (config.debug.resultID === true) {
                     console.log(warning("MESSAGE RECEIVED OUT OF GAME TIME FOR RESULT #"+instances[key].resultID));
                 }
-            }
-            else {
+            } else {
                 returnedResults.push(instances[key].resultID);
             }
         }
@@ -1300,8 +1294,7 @@ function combatParse(message, resultID, callback)
                         combatArray.vOutfit.name = voutfitName;
                         combatArray.vOutfit.tag = voutfitTag;
                         combatArray.vOutfit.faction = voutfitFaction;
-                    }
-                    else {
+                    } else {
                         combatArray.vOutfit = {};
                         combatArray.vOutfit.id = "0";
                         combatArray.vOutfit.name = "No Outfit";
@@ -1459,8 +1452,7 @@ function insertOutfitStats(resultID, combatArray)
     if (combatArray.teamkill === 1) { // TK
         outfitTotalsUpdates[resultID][killOutfit].outfitTKs++;
         outfitTotalsUpdates[resultID][deathOutfit].outfitDeaths++;
-    }
-    else if (combatArray.suicide === 1) { // If a suicide
+    } else if (combatArray.suicide === 1) { // If a suicide
         outfitTotalsUpdates[resultID][deathOutfit].outfitDeaths++;
         outfitTotalsUpdates[resultID][deathOutfit].outfitSuicides++;
     } else { // Normal kill
@@ -1914,21 +1906,17 @@ function updateFactionStats(resultID, combatArray)
 
     if (killerFID === 1) {
         kFaction = "VS";
-    }
-    else if (killerFID === 2) {
+    } else if (killerFID === 2) {
         kFaction = "NC";
-    }
-    else if (killerFID === 3) {
+    } else if (killerFID === 3) {
         kFaction = "TR";
     }
 
     if (victimFID === 1) {
         vFaction = "VS";
-    }
-    else if (victimFID === 2) {
+    } else if (victimFID === 2) {
         vFaction = "NC";
-    }
-    else if (victimFID === 3) {
+    } else if (victimFID === 3) {
         vFaction = "TR";
     }
 
@@ -1941,8 +1929,7 @@ function updateFactionStats(resultID, combatArray)
         if (config.debug.combat === true) {
             console.log(critical("TK"));
         }
-    }
-    else if (combatArray.suicide === 1) { // Is it a suicide?
+    } else if (combatArray.suicide === 1) { // Is it a suicide?
         if (killerFID === 0) { // If the faction is missing, use the victim
             kFaction = vFaction;
         }
@@ -2618,8 +2605,7 @@ function findOutfitName(outfitID, world, callback)
 
     if (world >= 2000) {
         url = 'http://census.daybreakgames.com/s:'+config.serviceID+'/get/ps2ps4eu:v2/outfit/?outfit_id='+outfitID;
-    }
-    else if (world >= 1000) {
+    } else if (world >= 1000) {
         url = 'http://census.daybreakgames.com/s:'+config.serviceID+'/get/ps2ps4us:v2/outfit/?outfit_id='+outfitID;
     } else {
         url = 'http://census.daybreakgames.com/s:'+config.serviceID+'/get/ps2:v2/outfit/?outfit_id='+outfitID;
