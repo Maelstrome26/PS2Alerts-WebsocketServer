@@ -51,14 +51,11 @@ var cachePool = mysql.createPool({
 });
 
 // Better handling of uncaught Exceptions, allowing you to email yourself or log it or whatnot.
-process.on('uncaughtException', function(err)
-{
+process.on('uncaughtException', function(err) {
     console.error(new Date().toUTCString() + ' uncaughtException:', err.message);
     console.error(err.stack);
 
     reportError(err, "uncaughtException");
-
-    process.exit(1);
 });
 
 /**
@@ -82,7 +79,6 @@ var subscriptionDisplayContent = {};
 
 var wsClient;
 var perfStats = {};
-var perfSecs = 0;
 
 /**************
 Admin API Keys
@@ -90,108 +86,125 @@ Admin API Keys
 
 var apiKeys = {};
 
-function dbQuery(query, dbPool, callback) {
-    // #lazycode
-    if (dbPool instanceof Function) {
-        callback = dbPool;
-        dbPool = 'pool';
+function dbQuery(options, callback) {
+    var selectedPool = null;
+
+    if (!options.d) {
+        options.d = null;
     }
 
-    if (dbPool === 'cache') {
-        cachePool.query(query, function(err, returns) {
-            if (err) {
+    if (options.p === 'cache') {
+        selectedPool = cachePool;
+    } else {
+        selectedPool = pool;
+    }
+
+    if (config.debug.databaseQueries === true) {
+        console.log('dbQuery q', options.q);
+        console.log('dbQuery d', options.d);
+    }
+
+    selectedPool.query(options.q, options.d, function(err, returns) {
+        if (err) {
+            if (err.errno === 1213) { // If deadlock or duplicate
+                handleDeadlock(options, selectedPool, 0);
+            } else if (err.errno === 1062) {
+                handleDuplicate(options, selectedPool);
+            } else {
                 throw (err);
             }
+        }
+        if (callback) {
             return callback(returns);
-        });
-    } else {
-        pool.query(query, function(err, returns) {
-            if (err) {
-                throw (err);
-            }
-            return callback(returns);
-        });
-    }
+        }
+    });
 }
 
-function dbQueryParameter(query, data, dbPool, callback) {
-    // #lazycode
-    if (dbPool instanceof Function) {
-        callback = dbPool;
-        dbPool = 'pool';
-    }
-
-    if (dbPool === 'cache') {
-        cachePool.query(query, data, function(err, returns) {
-            if (err) {
-                if (err.errno === 1213) { // If deadlock
-                    handleDeadlock(query); // Call upon itself to try again.
-                } else {
-                    throw (err);
-                }
-            }
-            if (callback) {
-                return callback(returns);
-            }
-        });
-    } else {
-        pool.query(query, data, function(err, returns) {
-            if (err) {
-                if (err.errno === 1213) { // If deadlock
-                    handleDeadlock(query); // Call upon itself to try again.
-                } else {
-                    throw (err);
-                }
-            }
-            if (callback) {
-                return callback(returns);
-            }
-        });
-    }
-}
-
-function handleDeadlock(query, tries) {
-    if (tries === undefined) {
-        tries = 0;
-    }
-    tries = tries++;
-
-    if (config.debug.deadlocks === true) {
-        console.log(warning("Handling deadlock! Try #"+tries));
-        console.trace();
+function handleDeadlock(options, selectedPool, tries) {
+    if (config.debug.databaseErrors === true) {
+        console.log(warning("Handling deadlock... try #"+tries));
     }
 
     if (tries < 20) {
         var rand = Math.random() * (1000 - 250) + 250;
 
         setTimeout(function() {
-            pool.query(query, function(err, result) {
+            selectedPool.query(options.q, options.d, function(err, result) {
                 if (err) {
                     if (err.errno === 1213) { // If deadlock
-                        handleDeadlock(query, tries); // Call upon itself to try again.
+                        handleDeadlock(options, selectedPool, tries); // Call upon itself to try again. #Recursion
                     }
                 }
 
                 if (result) {
-                    if (result.affectedRows > 0 && config.debug.deadlocks === true) {
-                        console.log(warning("Deadlock / Duplicate handled!"));
+                    if (result.affectedRows > 0 && config.debug.databaseErrors === true) {
+                        console.log(success("Deadlock handled!"));
                     }
                 } else {
-                    reportError(query, "ERROR HANDLING DEADLOCK");
-                    console.log(query);
+                    reportError(options.q, "ERROR HANDLING DEADLOCK RESULT");
+                    console.log('query', options.q);
+                    console.log('data', options.d);
                 }
             });
         }, rand);
     } else {
         var error = new Error().stack;
-        reportError(query, "ERROR HANDLING DEADLOCK!");
         reportError(error, "ERROR HANDLING DEADLOCK!");
+        console.log('query', options.q);
+        console.log('data', options.d);
     }
+}
+
+function handleDuplicate(options, selectedPool) {
+    if (config.debug.databaseErrors) {
+        console.log('Handling duplicate...');
+    }
+
+    if (options.f === undefined) {
+        reportError('Unable to handle duplicate! No fallback supplied!', 'handleDuplicate');
+        console.log('Original Query', options.q);
+        return false;
+    }
+
+    if (options.f === null) {
+        if (config.debug.databaseErrors === true) {
+            console.log('Fallback query explicitly defined as null, ignoring fallback');
+            console.log('Original query pre fallback:', options.q);
+            return false;
+        }
+    }
+
+    if (!options.d) {
+        console.log('nulled options.d');
+        options.d = null;
+    }
+
+    if (config.debug.databaseQueries) {
+        console.log('Failback Query', options.f);
+        console.log('Failback data', options.d);
+    }
+
+    selectedPool.query(options.f, options.d, function(err) {
+        if (err) {
+            if (err.errno === 1213) { // If deadlock or duplicate
+                handleDeadlock(options, selectedPool);
+            } else if (err.errno === 1062) {
+                console.log(critical('Query attempted:', options.f));
+                reportError('handleDuplicate is fucked.', 'handleDuplicate');
+            }
+        } else {
+            if (config.debug.databaseErrors) {
+                console.log(success('handleDuplicate was successful'));
+                console.log('Original query:', options.q);
+                console.log('Fallback query:', options.f);
+            }
+        }
+    });
 }
 
 //Pulls API keys from the database so that clients may communicate with this websocket server safely
 function generate_api_keys() {
-    dbQuery('SELECT * FROM APIUsers', 'cache', function(result) {
+    dbQuery({q:'SELECT * FROM APIUsers', p:'cache'}, function(result) {
         for (var i = result.length - 1; i >= 0; i--) {
             apiKeys[i] = {};
 
@@ -204,36 +217,29 @@ function generate_api_keys() {
 }
 
 // Functionality to authenticate requests and allow certain actions to happen
-function checkAPIKey(APIKey, callback)
-{
+function checkAPIKey(APIKey, callback) {
     var isValid = false;
     var admin = false;
     var username = false;
 
     APIKey = String(APIKey);
 
-    if (APIKey !== "undefined")
-    {
-        if (config.debug.auth === true)
-        {
+    if (APIKey !== "undefined") {
+        if (config.debug.auth === true) {
             console.log (notice("CHECKING API KEY: "+APIKey));
         }
 
-        Object.keys(apiKeys).forEach(function(i) // Loop through the API keys array to check against supplied key
-        {
-            if (apiKeys[i].apikey === APIKey) // If there's a match
-            {
+        Object.keys(apiKeys).forEach(function(i) {// Loop through the API keys array to check against supplied key
+            if (apiKeys[i].apikey === APIKey) {// If there's a match
                 isValid = true;
 
-                if (config.debug.auth === true)
-                {
+                if (config.debug.auth === true) {
                     console.log(success("API KEY MATCH"));
                 }
 
                 username = apiKeys[i].user;
 
-                if (parseInt(apiKeys[i].admin) !== 0) // If an admin
-                {
+                if (parseInt(apiKeys[i].admin) !== 0) {// If an admin
                     admin = true;
                 }
             }
@@ -250,13 +256,11 @@ function checkAPIKey(APIKey, callback)
 generate_weapons(function() // Generate weapons first, before loading websocket
 {
     console.log("WEAPONS READY!");
-    conWatcherInterval = setInterval(function() //You can change this if you want to reconnect faster, or slower.
-    {
+    conWatcherInterval = setInterval(function() {//You can change this if you want to reconnect faster, or slower.
         conWatcher();
     }, 3000);
 
-    subWatcherInterval = setInterval(function()
-    {
+    subWatcherInterval = setInterval(function() {
         subWatcher();
     }, 10000); //You can change this if you want to reconnect faster, or slower.
 
@@ -300,8 +304,7 @@ function persistentClient()
     });
 
     client.on('message', function(data) {
-        if(config.debug.datadump === true)
-        {
+        if(config.debug.datadump === true) {
             console.log(data);
         }
 
@@ -390,7 +393,7 @@ function onConnect(client) // Set up the websocket
 function checkMapInitial(callback)
 {
     Object.keys(instances).forEach(function(key) {
-        dbQuery("SELECT * FROM ws_map_initial WHERE resultID = "+instances[key].resultID, function(result) {
+        dbQuery({q:"SELECT * FROM ws_map_initial WHERE resultID = "+instances[key].resultID}, function(result) {
             if (result[0] === undefined) { // If no map initial records exist, run it
 
                 console.log(critical("MAP INITIAL MISSING FOR ALERT: #"+instances[key].resultID));
@@ -447,11 +450,13 @@ function processMessage(messageData, client)
 
                         var alertType = parseInt(message.metagame_event_type_id);
                         var world = parseInt(message.world_id);
-                        var zone = parseInt(message.zone_id);
                         var alertStatus = parseInt(message.status);
 
                         APIAlertTypes(alertType, function(typeData) { // Check if alerts are supported
                             if (typeData !== null) { // If a valid alert type
+                                var zone = parseInt(typeData.zone);
+                                message.zone_id = typeData.zone;
+
                                 if (!zone) {
                                     console.log(critical(JSON.stringify(message, null, 4)));
                                     throw("MISSING ZONE ID FOR WORLD: "+world);
@@ -471,27 +476,17 @@ function processMessage(messageData, client)
                                                 console.log(critical("RESULT ALREADY FOUND, IGNORING"));
                                                 reportError("Result already found. "+JSON.stringify(message, null, 4), "Insert Alert");
                                             }
+                                        } else {
+                                            console.log(critical("Received Jaeger Alert Start message. Ignored."));
                                         }
-                                        else
-                                        {
-                                            console.log(critical("Recieved Jaeger Alert Start message. Ignored."));
-                                        }
-                                    }
-                                    else if (alertStatus === 0) { // If alert end
+                                    } else if (alertStatus === 0) { // If alert end
                                         console.log(notice(resultIDArray));
                                         var resultID = resultIDArray[0];
 
                                         if (resultID !== undefined) {
-                                            pool.getConnection(function(poolErr, dbConnection) {
-                                                if (poolErr) {
-                                                    throw(poolErr);
-                                                }
-
-                                                console.log(success("================== ENDING ALERT =================="));
-                                                endAlert(message, resultID, dbConnection, function(resultID)
-                                                {
-                                                    console.log(success("================ SUCCESSFULLY ENDED ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
-                                                });
+                                            console.log(success("================== ENDING ALERT =================="));
+                                            endAlert(message, resultID, function(resultID) {
+                                                console.log(success("================ SUCCESSFULLY ENDED ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
                                             });
                                         } else {
                                             reportError("UNDEFINED RESULT ID ALERT END - World: "+world, "End Alert");
@@ -525,7 +520,9 @@ function processMessage(messageData, client)
                                 if (config.toggles.combat === true) {
                                     if (eventType === "Combat") {// If a combat event
                                         combatParse(message, resultID, function() {
-                                            console.log('Combat message successfully parsed');
+                                            if (config.debug.combat === true) {
+                                                console.log('Combat message successfully parsed');
+                                            }
                                         });
                                     }
                                 }
@@ -533,18 +530,16 @@ function processMessage(messageData, client)
                                     if (eventType === "FacilityControl") { // If a territory Update
                                         if (resultID) {
                                             updateMapData(message, resultID, function() {
-                                                console.log(success("PROCESSED FACILITY CONTROL"));
+                                                if (config.debug.facility === true) {
+                                                    console.log(success("PROCESSED FACILITY CONTROL"));
+                                                }
                                             });
                                         }
                                     }
                                 }
                                 if (config.toggles.vehicledestroy === true) {
                                     if (eventType === "VehicleDestroy") {
-                                        insertVehicleStats(message, resultID, 0, function() {
-                                            if (config.debug.vehicles === true) {
-                                                console.log(success("PROCESSED VEHICLE KILLS"));
-                                            }
-                                        });
+                                        insertVehicleStats(message, resultID, 0);
                                     }
                                 }
 
@@ -695,7 +690,7 @@ function processMessage(messageData, client)
                                         world: worldID
                                     };
 
-                                    dbQueryParameter("INSERT INTO ws_disruption SET ?", insertDisruption);
+                                    dbQuery({q:"INSERT INTO ws_disruption SET ?", d: insertDisruption});
                                 } else if (lastWorldDisruption[worldID]) {
                                     console.log(notice("World disruption was out of limit"));
                                 }
@@ -738,32 +733,42 @@ function findResultID(message, eventType, callback)
     var time = new Date().getTime();
     time = parseInt(time / 1000); // To convert to seconds
 
-    Object.keys(instances).forEach(function(key) {
-        if (instances[key].world === world && instances[key].zone === zone) {
-            var startTime = instances[key].startTime;
-            var endTime = instances[key].endTime;
+    Object.keys(instances).forEach(function(resultID) {
+        if (instances[resultID].world === world && instances[resultID].zone === zone) {
+            var startTime = instances[resultID].startTime;
+            var endTime = instances[resultID].endTime;
 
             if (isNaN(startTime) === true) {
-                console.log(instances[key]);
+                console.log(instances[resultID]);
                 throw('startTime is NaN for instance');
             }
 
             if (isNaN(endTime) === true) {
-                console.log(instances[key]);
+                console.log(instances[resultID]);
                 throw('endTime is NaN for instance');
             }
 
             if (eventType !== "MetagameEvent" && eventType !== "PopulationChange") {
                 if (startTime < time && endTime > time) { // If message is still within time
-                    returnedResults.push(instances[key].resultID);
+                    returnedResults.push(instances[resultID].resultID);
                 } else if (config.debug.resultID === true) {
-                    console.log(warning("MESSAGE RECEIVED OUT OF GAME TIME FOR RESULT #"+instances[key].resultID));
+                    console.log(warning("MESSAGE RECEIVED OUT OF GAME TIME FOR RESULT #" + instances[resultID].resultID));
                 }
             } else {
-                returnedResults.push(instances[key].resultID);
+                returnedResults.push(instances[resultID].resultID);
             }
         }
     });
+
+    if (returnedResults.length === 0) {
+        if (config.debug.resultID) {
+            console.log(eventType);
+            console.log('world', world);
+            console.log('zone', zone);
+            console.log(message);
+            console.log('No alert could be found for: W:' + world + ' Z:' + zone);
+        }
+    }
 
     return callback(returnedResults);
 }
@@ -784,7 +789,7 @@ function reportError(error, loc, severeError)
         time: parseInt(time)
     };
 
-    dbQueryParameter('INSERT INTO ws_errors SET ?', errPost, function() {
+    dbQuery({q:'INSERT INTO ws_errors SET ?', d:errPost}, function() {
         if (severeError === true) {
             resetScript();
         }
@@ -792,6 +797,7 @@ function reportError(error, loc, severeError)
 }
 
 function resetScript() {
+    console.log(critical("SEVERE ERROR DETECTED! RESTARTING SCRIPT!!!!!!!!"));
     reportError("RESTARTING SCRIPT", "resetScript");
     process.exit(0);
 }
@@ -817,7 +823,7 @@ function insertAlert(message, callback)
 
     var world = parseInt(message.world_id);
     var zone = parseInt(message.zone_id);
-    var alertType = message.metagame_event_type_id;
+    var alertType = parseInt(message.metagame_event_type_id);
 
     // Check for the zone it's not present for some reason
     if (!zone || zone === 0) {
@@ -833,10 +839,9 @@ function insertAlert(message, callback)
         return false;
     }
 
-    dbQuery("SELECT * FROM ws_results WHERE ResultStartTime = "+message.start_time+" AND ResultServer="+world, function(result) {
+    dbQuery({q:"SELECT * FROM ws_results WHERE ResultStartTime = "+message.start_time+" AND ResultServer="+world+" AND ResultAlertCont="+zone}, function(result) {
         if (result[0] !== undefined) {
-            console.log(critical("ATTEMPTED TO ADD AN EXISTING ALERT!"));
-            reportError("Attempted to insert alert when already exists! World: "+world+" - Zone: "+zone, "Insert Alert");
+            console.log(critical("Attempted to insert alert when already exists! World: "+world+" - Zone: "+zone));
             return;
         }
 
@@ -893,7 +898,7 @@ function insertAlert(message, callback)
 
             console.log("================ INSERTING INITIAL RECORD ================");
 
-            dbQueryParameter('INSERT INTO ws_results SET ?', startAlert, function(result) {
+            dbQuery({q:'INSERT INTO ws_results SET ?', d:startAlert}, function(result) {
                 var resultID = result.insertId;
                 var ends = calcEndTime(message.start_time, message.metagame_event_type_id);
 
@@ -932,7 +937,7 @@ function insertAlert(message, callback)
 
                 sendMonitor("alertStart", toSend);
 
-                dbQueryParameter('INSERT INTO ws_instances SET ?', monitorPost, function() {
+                dbQuery({q:'INSERT INTO ws_instances SET ?', d:monitorPost}, function() {
                     console.log(success("INSERT ws_instances RECORD FOR ALERT: #"+resultID+" SUCCESSFUL!"));
 
                     var factionArray = {
@@ -959,12 +964,15 @@ function insertAlert(message, callback)
                         totalHeadshots: 0
                     };
 
-                    dbQueryParameter('INSERT INTO ws_factions SET ?', factionArray, function() {
+                    dbQuery({q:'INSERT INTO ws_factions SET ?', d:factionArray}, function() {
                         console.log(success("INSERT ws_factions RECORD FOR ALERT: #"+resultID+" SUCCESSFUL!"));
+
+                        console.log(notice("SENDING SUBSCRIPTIONS FOR ALERT: #"+resultID))
+                        fireSubscriptions(message, resultID, "subscribe");
 
                         console.log(success("INSERT OF ALERT: #"+resultID+" SUCCESSFUL!"));
                         console.log(success("====================================================="));
-                        callback();
+                        callback(resultID);
                     });
                 });
             });
@@ -974,8 +982,7 @@ function insertAlert(message, callback)
     });
 }
 
-function endAlert(message, resultID, callback)
-{
+function endAlert(message, resultID, callback) {
     console.log(message);
     var world = message.world_id;
     var zone = message.zone_id;
@@ -984,7 +991,6 @@ function endAlert(message, resultID, callback)
 
     if (resultID) {
         var date = new Date();
-
         var datetime = DateCalc(date);
 
         if (!message.end_time || message.end_time == "0") { // If time is empty, use the current datetime as a backup
@@ -994,15 +1000,14 @@ function endAlert(message, resultID, callback)
 
         /* Alert Processing */
 
-        dbQuery("SELECT * FROM ws_map WHERE resultID="+resultID+" ORDER BY timestamp DESC LIMIT 1", function(Lresult) {
-            dbQuery("SELECT * FROM ws_map WHERE resultID="+resultID+" ORDER BY timestamp ASC LIMIT 1", function(Fresult) {
-                if (!Fresult[0] && !Lresult[0]) {
+        dbQuery({q:"SELECT * FROM ws_map WHERE resultID="+resultID+" ORDER BY timestamp DESC LIMIT 1"}, function(Lresult) {
+            dbQuery({q:"SELECT * FROM ws_map WHERE resultID="+resultID+" ORDER BY timestamp ASC LIMIT 1"}, function(Fresult) {
+                if (Fresult.length === 0 || Lresult.length === 0) {
                     reportError("MISSING CAPTURE LOGS. UNABLE TO CALCULATE END OF ALERT #" + resultID, "End Alert");
+                    console.log(critical("Marking Alert " + resultID + " as invalid"));
 
-                    console.log(critical("Marking Alert as Invalid"));
-
-                    dbQuery('UPDATE ws_results SET Valid = 0, InProgress = 0 WHERE ResultID = ' + resultID, function () {
-                        dbQuery('DELETE FROM ws_instances WHERE resultID = ' + resultID, function () {
+                    dbQuery({q:'UPDATE ws_results SET Valid = 0, InProgress = 0, ResultEndTime = '+message.end_time+' WHERE ResultID = ' + resultID}, function () {
+                        dbQuery({q:'DELETE FROM ws_instances WHERE resultID = ' + resultID}, function () {
                             delete populationInstances[resultID];
                             delete instances[resultID];
                             return false;
@@ -1020,11 +1025,9 @@ function endAlert(message, resultID, callback)
                     }
 
                     console.log(success("WINNER IS: "+winner));
-
                     console.log("UPDATING RESULT RECORD #"+resultID);
 
-                    dbQuery('UPDATE ws_results SET ResultDateTime="'+datetime+'", InProgress="0", Valid="1", ResultEndTime="'+message.end_time+'", ResultWinner="'+winner+'", ResultDomination="'+domination+'", ResultDraw="'+draw+'" WHERE ResultID='+resultID, function(result) {
-
+                    dbQuery({q:'UPDATE ws_results SET ResultDateTime="'+datetime+'", InProgress="0", Valid="1", ResultEndTime="'+message.end_time+'", ResultWinner="'+winner+'", ResultDomination="'+domination+'", ResultDraw="'+draw+'" WHERE ResultID='+resultID}, function(result) {
                         if (result.affectedRows === 0) { // if it failed
                             reportError("UPDATING ALERT RECORD FAILED! #"+resultID, 'endAlert - Update Result', true)
                         }
@@ -1032,7 +1035,7 @@ function endAlert(message, resultID, callback)
                         console.log(success("RECORD UPDATED"));
                         console.log("DELETING INSTANCE RECORD #"+resultID);
 
-                        dbQuery('DELETE FROM ws_instances WHERE resultID='+resultID, function(result) {
+                        dbQuery({q:'DELETE FROM ws_instances WHERE resultID='+resultID}, function(result) {
                             if (result.affectedRows === 0) { // if it failed
                                 reportError("DELETING ALERT INSTANCE RECORD RECORD FAILED! #"+resultID, 'endAlert - Delete Instance', true);
                             }
@@ -1065,7 +1068,7 @@ function endAlert(message, resultID, callback)
                             delete populationInstances[resultID];
                             delete instances[resultID];
 
-                            callback(resultID);
+                            return callback(resultID);
                         });
                     });
                 });
@@ -1113,7 +1116,7 @@ function updateMapData(message, resultID, callback)
         sendResult("facility", post, resultID);
         sendMonitor("update", post);
 
-        dbQueryParameter('INSERT INTO ws_map SET ?', post, function() {
+        dbQuery({q:'INSERT INTO ws_map SET ?', d:post}, function() {
             if (instances[resultID] === undefined) {
                 reportError("MISSING INSTANCE FOR MAP UPDATE!!!", "Update Map");
                 callback();
@@ -1130,14 +1133,14 @@ function updateMapData(message, resultID, callback)
                     controlTR: message.control_tr
                 };
 
-                dbQueryParameter("UPDATE ws_instances SET ? WHERE resultID = "+resultID, instancesPost, function(result) {
+                dbQuery({q:"UPDATE ws_instances SET ? WHERE resultID = "+resultID, d:instancesPost}, function(result) {
                     if (result.affectedRows === 0) {
                         reportError('Instance didn\'t get updated. Result #' + resultID);
                     }
                 });
 
                 if (message.outfit_id > 0) {
-                    dbQuery("UPDATE ws_outfits_total SET outfitCaptures=outfitCaptures+1 WHERE outfitID = '"+message.outfit_id+"'", function(result) {
+                    dbQuery({q:"UPDATE ws_outfits_total SET outfitCaptures=outfitCaptures+1 WHERE outfitID = '"+message.outfit_id+"'"}, function(result) {
                         if (result.affectedRows === 0) {
                             reportError('ws_outfits_total outfit captures didn\'t get updated. Result #' + resultID);
                         }
@@ -1167,8 +1170,8 @@ function combatParse(message, resultID, callback)
     var suicide = 0;
     var teamKill = 0;
 
-    messagesRecieved++;
-    messagesRecievedSec++;
+    messagesReceived++;
+    messagesReceived30Sec++;
 
     if (attackerFaction === victimFaction) { // If a TK
         teamKill = 1;
@@ -1360,9 +1363,8 @@ function insertWeaponStats(message, resultID, combatArray)
     }
 
     var updateWeaponTotalsQuery = 'UPDATE ws_weapons_totals SET '+kill+teamkill+headshot+' WHERE weaponID="'+message.weapon_id+'" AND resultID='+resultID;
-    var updateWeaponPlayerQuery = 'UPDATE ws_weapons SET '+kill+teamkill+headshot+' WHERE weaponID="'+message.weapon_id+'" AND playerID="'+message.attacker_character_id+'" AND resultID='+resultID;
 
-    dbQuery(updateWeaponTotalsQuery, function(result) {
+    dbQuery({q:updateWeaponTotalsQuery}, function(result) {
         var numTRows = result.affectedRows;
 
         var killInt = 1;
@@ -1380,18 +1382,20 @@ function insertWeaponStats(message, resultID, combatArray)
                 teamkills: combatArray.teamkill
             };
 
-            dbQueryParameter('INSERT INTO ws_weapons_totals SET ?', weaponTArray, function() {
+            dbQuery({q:'INSERT INTO ws_weapons_totals SET ?', d:weaponTArray, f:updateWeaponTotalsQuery}, function() {
                 if (config.debug.weapons === true) {
-                    console.log('Inserted new record into ws_weapons_totals');
+                    console.log('Inserted new record into ws_weapons_totals for alert #'+resultID);
                 }
             });
         }
 
-        dbQuery(updateWeaponPlayerQuery, function(result) {
+        var updateWeaponPlayerQuery = 'UPDATE ws_weapons SET '+kill+teamkill+headshot+' WHERE weaponID="'+message.weapon_id+'" AND playerID="'+message.attacker_character_id+'" AND resultID='+resultID;
+
+        dbQuery({q:updateWeaponPlayerQuery}, function(result) {
             var numRows = result.affectedRows;
 
             if (numRows === 0) { // If new record
-                var weaponArray = {
+                var weaponAttackerArray = {
                     resultID: resultID,
                     playerID: message.attacker_character_id,
                     weaponID: message.weapon_id,
@@ -1401,12 +1405,12 @@ function insertWeaponStats(message, resultID, combatArray)
                 };
 
                 if (config.debug.weapons === true) {
-                    console.log(weaponArray);
+                    console.log(weaponAttackerArray);
                 }
 
-                dbQueryParameter('INSERT INTO ws_weapons SET ?', weaponArray, function() {
+                dbQuery({q:'INSERT INTO ws_weapons SET ?', d:weaponAttackerArray, f:updateWeaponPlayerQuery}, function() {
                     if (config.debug.weapons === true) {
-                        console.log('Inserted new record into ws_weapons');
+                        console.log('Inserted new record into ws_weapons (attacker) for alert #'+resultID);
                     }
                 });
             }
@@ -1536,7 +1540,7 @@ function insertPlayerStats(resultID, combatArray)
         console.log(critical(attackerQuery));
     }
 
-    dbQuery(attackerQuery, function(resultAttacker) {
+    dbQuery({q:attackerQuery}, function(resultAttacker) {
         if (resultAttacker.affectedRows === 0) { // If new record for Attacker
             var attackerData = {
                 resultID: resultID,
@@ -1552,10 +1556,10 @@ function insertPlayerStats(resultID, combatArray)
                 headshots: headshot
             };
 
-            dbQueryParameter('INSERT INTO ws_players SET ?', attackerData, function () {
+            dbQuery({q:'INSERT INTO ws_players SET ?', d:attackerData, f:attackerQuery}, function() {
                 if (config.debug.combat === true) {
                     console.log(attackerData);
-                    console.log('Inserted new player record (attacker) for alert # ' + resultID);
+                    console.log('Inserted new player record (attacker) for alert #' + resultID);
                 }
             });
         }
@@ -1563,7 +1567,7 @@ function insertPlayerStats(resultID, combatArray)
 
     var attackerTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+attackerOutfit+'", playerServer = '+worldID+', playerFaction = '+attackerFID+', playerBR = '+attackerBR+', '+aKillQuery+''+headshotQuery+''+aDeathQuery+''+aSuicideQuery+''+aTKQuery+' WHERE playerID="'+attackerID+'"';
 
-    dbQuery(attackerTotalQuery, function(resultAttackerTotal) {
+    dbQuery({q:attackerTotalQuery}, function(resultAttackerTotal) {
         if (resultAttackerTotal.affectedRows === 0) { // If new total record for Attacker
             var attackerTotalData = {
                 playerID: attackerID,
@@ -1579,10 +1583,10 @@ function insertPlayerStats(resultID, combatArray)
                 playerServer: worldID
             };
 
-            dbQueryParameter('INSERT INTO ws_players_total SET ?', attackerTotalData, function() {
+            dbQuery({q:'INSERT INTO ws_players_total SET ?', d:attackerTotalData, f:attackerTotalQuery}, function() {
                 if (config.debug.combat === true) {
                     console.log(attackerTotalData);
-                    console.log('Inserted new player total record (attacker) for alert # ' + resultID);
+                    console.log('Inserted new player total record (attacker) for alert #' + resultID);
                 }
             });
         }
@@ -1599,7 +1603,7 @@ function insertPlayerStats(resultID, combatArray)
             console.log(critical(victimQuery));
         }
 
-        dbQuery(victimQuery, function(resultVictim) {
+        dbQuery({q:victimQuery}, function(resultVictim) {
             if (resultVictim.affectedRows === 0) { // If new record for Victim
                 var victimData = {
                     resultID: resultID,
@@ -1615,10 +1619,10 @@ function insertPlayerStats(resultID, combatArray)
                     headshots: 0
                 };
 
-                dbQueryParameter('INSERT INTO ws_players SET ?', victimData, function() {
+                dbQuery({q:'INSERT INTO ws_players SET ?', d:victimData, f:victimQuery}, function() {
                     if (config.debug.combat === true) {
                         console.log(victimData);
-                        console.log('Inserted new player record (death) for alert # ' + resultID);
+                        console.log('Inserted new player record (victim) for alert #' + resultID);
                     }
                 });
             }
@@ -1626,7 +1630,7 @@ function insertPlayerStats(resultID, combatArray)
 
         var victimTotalQuery = 'UPDATE ws_players_total SET playerOutfit = "'+victimOutfit+'", playerServer = '+worldID+', playerFaction = '+victimFID+', playerBR = '+victimBR+', '+vDeathQuery+' WHERE playerID="'+victimID+'"';
 
-        dbQuery(victimTotalQuery, function(resultVictimTotal) {
+        dbQuery({q:victimTotalQuery}, function(resultVictimTotal) {
             if (resultVictimTotal.affectedRows === 0) { // If new total record for Victim
                 var victimTotalData = {
                     playerID: victimID,
@@ -1641,10 +1645,10 @@ function insertPlayerStats(resultID, combatArray)
                     headshots: 0
                 };
 
-                dbQueryParameter('INSERT INTO ws_players_total SET ?', victimTotalData, function() {
+                dbQuery({q:'INSERT INTO ws_players_total SET ?', d:victimTotalData, f:victimTotalQuery}, function() {
                     if (config.debug.combat === true) {
                         console.log(victimTotalData);
-                        console.log('Inserted new player record (death) for alert # ' + resultID);
+                        console.log('Inserted new player total record (victim) for alert #' + resultID);
                     }
                 });
             }
@@ -1682,7 +1686,7 @@ function batchUpdateFactionStats(callback)
             console.log(JSON.stringify(object, null, 4));
         }
 
-        dbQuery("UPDATE ws_factions SET killsVS=killsVS+"+object.killsVS+", killsNC=killsNC+"+object.killsNC+", killsTR=killsTR+"+object.killsTR+", deathsVS=deathsVS+"+object.deathsVS+", deathsNC=deathsNC+"+object.deathsNC+", deathsTR=deathsTR+"+object.deathsTR+", teamKillsVS=teamKillsVS+"+object.teamKillsVS+", teamKillsNC=teamKillsNC+"+object.teamKillsNC+", teamKillsTR=teamKillsTR+"+object.teamKillsTR+", suicidesVS=suicidesVS+"+object.suicidesVS+", suicidesNC=suicidesNC+"+object.suicidesNC+", suicidesTR=suicidesTR+"+object.suicidesTR+", headshotsVS=headshotsVS+"+object.headshotsVS+", headshotsNC=headshotsNC+"+object.headshotsNC+", headshotsTR=headshotsTR+"+object.headshotsTR+", totalKills=totalKills+"+object.totalKills+", totalDeaths=totalDeaths+"+object.totalDeaths+", totalTKs=totalTKs+"+object.totalTKs+", totalSuicides=totalSuicides+"+object.totalSuicides+", totalHeadshots=totalHeadshots+"+object.totalHeadshots+" WHERE resultID = "+key, function() {
+        dbQuery({q:"UPDATE ws_factions SET killsVS=killsVS+"+object.killsVS+", killsNC=killsNC+"+object.killsNC+", killsTR=killsTR+"+object.killsTR+", deathsVS=deathsVS+"+object.deathsVS+", deathsNC=deathsNC+"+object.deathsNC+", deathsTR=deathsTR+"+object.deathsTR+", teamKillsVS=teamKillsVS+"+object.teamKillsVS+", teamKillsNC=teamKillsNC+"+object.teamKillsNC+", teamKillsTR=teamKillsTR+"+object.teamKillsTR+", suicidesVS=suicidesVS+"+object.suicidesVS+", suicidesNC=suicidesNC+"+object.suicidesNC+", suicidesTR=suicidesTR+"+object.suicidesTR+", headshotsVS=headshotsVS+"+object.headshotsVS+", headshotsNC=headshotsNC+"+object.headshotsNC+", headshotsTR=headshotsTR+"+object.headshotsTR+", totalKills=totalKills+"+object.totalKills+", totalDeaths=totalDeaths+"+object.totalDeaths+", totalTKs=totalTKs+"+object.totalTKs+", totalSuicides=totalSuicides+"+object.totalSuicides+", totalHeadshots=totalHeadshots+"+object.totalHeadshots+" WHERE resultID = "+key}, function() {
             if (config.debug.batch === true) {
                 console.log('Factions updated for alert #' + key);
             }
@@ -1707,7 +1711,7 @@ function batchUpdateXpTotals(callback)
             console.log(updateTotalsQuery);
         }
 
-        dbQuery(updateTotalsQuery, function(result) {
+        dbQuery({q:updateTotalsQuery}, function(result) {
             if (result.affectedRows === 0) { // If missing record
                 console.log(notice("INSERTING XP TOTALS RECORD"));
                 var xpArrayTotals = {
@@ -1715,7 +1719,7 @@ function batchUpdateXpTotals(callback)
                     occurances: 1
                 };
 
-                dbQueryParameter('INSERT INTO ws_xp_totals SET ?', xpArrayTotals, function() {
+                dbQuery({q:'INSERT INTO ws_xp_totals SET ?', d:xpArrayTotals, f: updateTotalsQuery}, function() {
                     if (config.debug.batch === true) {
                         console.log('Batch inserted into ws_xs_totals');
                     }
@@ -1740,7 +1744,7 @@ function batchUpdateOutfitTotals(callback)
 
             var updateOutfitAlert = 'UPDATE ws_outfits SET outfitKills=outfitKills+'+object.outfitKills+', outfitDeaths=outfitDeaths+'+object.outfitDeaths+',outfitTKs=outfitTKs+'+object.outfitTKs+', outfitSuicides=outfitSuicides+'+object.outfitSuicides+' WHERE outfitID = "'+outfitID+'" AND resultID = '+resultID;
 
-            dbQuery(updateOutfitAlert, function(resultA) {
+            dbQuery({q:updateOutfitAlert}, function(resultA) {
                 if (resultA.affectedRows === 0) {
                     var outfitArrayKills = {
                         resultID: resultID,
@@ -1754,7 +1758,7 @@ function batchUpdateOutfitTotals(callback)
                         outfitTKs: object.outfitTKs
                     };
 
-                    dbQueryParameter('INSERT INTO ws_outfits SET ?', outfitArrayKills, function () {
+                    dbQuery({q:'INSERT INTO ws_outfits SET ?', d:outfitArrayKills, f:updateOutfitAlert}, function () {
                         if (config.debug.batch === true) {
                             console.log(success("Batch updated outfit totals for alert #" + resultID));
                         }
@@ -1766,7 +1770,7 @@ function batchUpdateOutfitTotals(callback)
 
             var updateOutfitTotals = 'UPDATE ws_outfits_total SET outfitKills=outfitKills+'+object.outfitKills+', outfitDeaths=outfitDeaths+'+object.outfitDeaths+',outfitTKs=outfitTKs+'+object.outfitTKs+', outfitSuicides=outfitSuicides+'+object.outfitSuicides+' WHERE outfitID = "'+outfitID+'"';
 
-            dbQuery(updateOutfitTotals, function(resultB) {
+            dbQuery({q:updateOutfitTotals}, function(resultB) {
                 if (resultB.affectedRows === 0) {// If new record for Attacker
                     var outfitArrayKills = {
                         outfitID: outfitID,
@@ -1780,7 +1784,7 @@ function batchUpdateOutfitTotals(callback)
                         outfitServer: object.world
                     };
 
-                    dbQueryParameter('INSERT INTO ws_outfits_total SET ?', outfitArrayKills, function() {
+                    dbQuery({q:'INSERT INTO ws_outfits_total SET ?', d:outfitArrayKills, f: updateOutfitTotals}, function() {
                         if (config.debug.batch === true) {
                             console.log(success("Batch updated outfit totals for outfit #" + outfitID));
                         }
@@ -1805,7 +1809,7 @@ function batchUpdateClassTotals(callback)
 
             var updateLoadoutQuery = 'UPDATE ws_classes SET kills=kills+'+object.kills+', deaths=deaths+'+object.deaths+', teamkills=teamkills+'+object.teamkills+', suicides=suicides+'+object.suicides+' WHERE resultID = '+resultID+' AND classID = '+classID;
 
-            dbQuery(updateLoadoutQuery, function(result) {
+            dbQuery({q:updateLoadoutQuery}, function(result) {
                 if (result.affectedRows === 0) {// If missing record
                     if (config.debug.classes === true) {
                         console.log(notice("INSERTING Class Attacker RECORD"));
@@ -1820,7 +1824,7 @@ function batchUpdateClassTotals(callback)
                         suicides: object.suicides
                     };
 
-                    dbQueryParameter('INSERT INTO ws_classes SET ?', classArray, function() {
+                    dbQuery({q:'INSERT INTO ws_classes SET ?', d:classArray, f: updateLoadoutQuery}, function() {
                         if (config.debug.classes === true) {
                             console.log(success("Batch updated class totals for alert #" + resultID));
                         }
@@ -1838,7 +1842,7 @@ function batchUpdateClassTotals(callback)
 
                 var updatePlayerLoadoutQuery = 'UPDATE ws_classes_totals SET kills=kills+'+object.kills+', deaths=deaths+'+object.deaths+', teamkills=teamkills+'+object.teamkills+', suicides=suicides+'+object.suicides+' WHERE resultID = '+resultID+' AND classID = '+classID+' AND playerID = '+playerID;
 
-                dbQuery(updatePlayerLoadoutQuery, function(result) {
+                dbQuery({q:updatePlayerLoadoutQuery}, function(result) {
                     if (result.affectedRows === 0) { // If missing record
                         if (config.debug.classes === true) {
                             console.log(notice("INSERTING Class Player Totals RECORD"));
@@ -1854,7 +1858,7 @@ function batchUpdateClassTotals(callback)
                             suicides  : object.suicides
                         };
 
-                        dbQueryParameter('INSERT INTO ws_classes_totals SET ?', classArray, function() {
+                        dbQuery({q:'INSERT INTO ws_classes_totals SET ?', d:classArray, f:updatePlayerLoadoutQuery}, function() {
                             if (config.debug.classes === true) {
                                 console.log(success("Batch updated class totals for class #" + classID + " - alert #"+resultID));
                             }
@@ -2012,7 +2016,7 @@ var vehNanite = {
     152: 0
 };
 
-function insertVehicleStats(message, resultID, combat, callback)
+function insertVehicleStats(message, resultID, combat)
 {
     if (combat === 0) {// If  a combat message, ignore this shizzle.
         var killerID = message.attacker_character_id;
@@ -2023,11 +2027,9 @@ function insertVehicleStats(message, resultID, combat, callback)
 
         addKillMonitor(killerID, victimID, "vKill", message.timestamp, killerVID, victimVID, resultID, null, null);
     }
-
-    callback();
 }
 
-function insertExperience(message, resultID, callback)
+function insertExperience(message, resultID)
 {
     var charID = message.character_id;
     var xpType = message.experience_id;
@@ -2107,7 +2109,7 @@ function insertExperience(message, resultID, callback)
 
         var updateQuery = 'UPDATE ws_xp SET occurances=occurances+1 WHERE playerID = "'+charID+'" AND resultID = '+resultID+' AND type = '+xpType;
 
-        dbQuery(updateQuery, function(result) {
+        dbQuery({q:updateQuery}, function(result) {
             if (result.affectedRows === 0) { // If missing record
                 if (config.debug.xpmessage === true) {
                     console.log(notice("INSERTING XP RECORD"));
@@ -2120,7 +2122,7 @@ function insertExperience(message, resultID, callback)
                     occurances: 1
                 };
 
-                dbQueryParameter('INSERT INTO ws_xp SET ?', xpArray, function() {
+                dbQuery({q:'INSERT INTO ws_xp SET ?', d:xpArray, f:updateQuery}, function() {
                     if (config.debug.xp === true) {
                         console.log('Inserted XP record for alert #' + resultID + ' - player #' + playerID);
                     }
@@ -2128,8 +2130,6 @@ function insertExperience(message, resultID, callback)
             }
         });
     }
-
-    callback();
 }
 
 function insertClassStats(resultID, combatArray)
@@ -2216,14 +2216,14 @@ function insertClassStats(resultID, combatArray)
     }
 }
 
-function insertAchievement(message, resultID, callback)
+function insertAchievement(message, resultID)
 {
     var charID = message.character_id;
     var cheevoID = message.achievement_id;
 
     var updateCheevoQuery = 'UPDATE ws_achievements SET occurances=occurances+1 WHERE playerID ='+charID+' AND achievementID = '+cheevoID+' AND resultID ='+resultID;
 
-    dbQuery(updateCheevoQuery, function(resultAchievement) {
+    dbQuery({q:updateCheevoQuery}, function(resultAchievement) {
         if (resultAchievement !== undefined && resultAchievement.affectedRows === 0) { // If missing record
             var achievementArray = {
                 playerID : charID,
@@ -2232,15 +2232,13 @@ function insertAchievement(message, resultID, callback)
                 occurances: 1
             };
 
-            dbQueryParameter('INSERT INTO ws_achievements SET ?', achievementArray, function() {
+            dbQuery({q:'INSERT INTO ws_achievements SET ?', d:achievementArray, f:updateCheevoQuery}, function() {
                 if (config.debug.achievements === true) {
                     console.log('Inserted achievement for player #' + charID + ' - alert #' + resultID);
                 }
             });
         }
     });
-
-    callback();
 }
 
 var populationPulls = {};
@@ -2272,7 +2270,7 @@ function insertPopulationStats(resultID, callback)
 
             sendResult("pops", popArray, resultID);
 
-            dbQueryParameter('INSERT INTO ws_pops SET ?', popArray, function() {
+            dbQuery({q:'INSERT INTO ws_pops SET ?', d:popArray}, function() {
                 if (config.debug.population) {
                     console.log(success("Inserted ws_pops data for Alert #"+resultID));
                 }
@@ -2669,14 +2667,12 @@ function findOutfitName(outfitID, world, callback)
 
 function checkPlayerCache(playerID, world, callback)
 {
-    dbQuery('SELECT * FROM player_cache WHERE playerID="'+playerID+'"', 'cache', function(result)
-    {
+    dbQuery({q:'SELECT * FROM player_cache WHERE playerID="'+playerID+'"', p:'cache'}, function(result) {
         if (config.debug.cache === true) {
             console.log(notice("PLAYER CACHE RESULT: " + JSON.stringify(result[0], null, 4)));
         }
 
-        if (!result[0]) // If empty
-        {
+        if (!result[0]) {// If empty
             findPlayerName(playerID, world, function(name, faction, br) {
                 if (name !== false && faction !== false) {
                     var now = Math.round(new Date().getTime() / 1000);
@@ -2690,12 +2686,12 @@ function checkPlayerCache(playerID, world, callback)
                         expires: cacheExpires
                     };
 
-                    dbQueryParameter('INSERT INTO player_cache SET ?', insertPArray, 'cache', function() {
+                    dbQuery({q:'INSERT INTO player_cache SET ?', d:insertPArray, p:'cache', f:null}, function() {
                         if (config.debug.cache === true) {
                             console.log(success("INSERTED PLAYER RECORD INTO CACHE TABLE"));
                         }
 
-                        dbQuery('UPDATE cache_hits SET cacheMisses=cacheMisses+1 WHERE dataType="PlayerCache"', 'cache', function() {
+                        dbQuery({q:'UPDATE cache_hits SET cacheMisses=cacheMisses+1 WHERE dataType="PlayerCache"', p:'cache'}, function() {
                             callback(name, br);
                         });
                     });
@@ -2709,7 +2705,7 @@ function checkPlayerCache(playerID, world, callback)
                 console.log(success("PLAYER CACHE HIT!"));
             }
 
-            dbQuery('UPDATE cache_hits SET cacheHits=CacheHits+1 WHERE dataType="PlayerCache"', 'cache', function() {
+            dbQuery({q:'UPDATE cache_hits SET cacheHits=CacheHits+1 WHERE dataType="PlayerCache"', p:'cache'}, function() {
                 callback(result[0].playerName, result[0].playerBR);
             });
         }
@@ -2730,7 +2726,7 @@ function checkOutfitCache(outfitID, worldID, callback)
         return callback(undefined, undefined, undefined, undefined);
     }
 
-    dbQuery('SELECT * FROM outfit_cache WHERE outfitID="'+outfitID+'"', 'cache', function(result) {
+    dbQuery({q:'SELECT * FROM outfit_cache WHERE outfitID="'+outfitID+'"', p:'cache'}, function(result) {
         if (config.debug.cache === true) {
             console.log(notice("OUTFIT CACHE RESULT: " + JSON.stringify(result[0], null, 4)));
         }
@@ -2742,7 +2738,9 @@ function checkOutfitCache(outfitID, worldID, callback)
                 }
 
                 if (leaderID === false) {
-                    console.log(critical("MISSING LEADER ID! Skipping cache."));
+                    if (config.debug.cache === true) {
+                        console.log(critical("MISSING LEADER ID! Skipping cache."));
+                    }
                     callback (false, false, false, false);
                 }
 
@@ -2760,24 +2758,24 @@ function checkOutfitCache(outfitID, worldID, callback)
                             expires: cacheExpires
                         };
 
-                        dbQueryParameter('INSERT INTO outfit_cache SET ?', insertOArray, 'cache', function() {
+                        dbQuery({q:'INSERT INTO outfit_cache SET ?', d:insertOArray, p:'cache', f:null}, function() {
                             if (config.debug.cache === true) {
                                 console.log(success("INSERTED OUTFIT RECORD INTO CACHE TABLE"));
                             }
 
-                            dbQuery('UPDATE cache_hits SET cacheMisses=cacheMisses+1 WHERE dataType="OutfitCache"', 'cache');
+                            dbQuery({q:'UPDATE cache_hits SET cacheMisses=cacheMisses+1 WHERE dataType="OutfitCache"', p:'cache'});
                             callback(outfitName, tag, faction, outfitID);
                         });
                     });
                 } else {
-                    console.log(critical("MISSING OUTFIT INFO! Skipping cache."));
-                    console.log(notice(outfitID));
-                    console.log(notice(worldID));
-                    callback (false, false, false, false);
+                    if (config.debug.cache === true) {
+                        console.log(critical("MISSING OUTFIT INFO! Skipping cache."));
+                    }
+                    callback(false, false, false, false);
                 }
             });
         } else {
-            dbQuery('UPDATE cache_hits SET cacheHits=cacheHits+1 WHERE dataType="OutfitCache"', 'cache');
+            dbQuery({q:'UPDATE cache_hits SET cacheHits=cacheHits+1 WHERE dataType="OutfitCache"', p:'cache'});
 
             if (config.debug.cache === true) {
                 console.log(success("OUTFIT CACHE HIT!"));
@@ -2790,9 +2788,21 @@ function checkOutfitCache(outfitID, worldID, callback)
 
 function calcWinners(message, resultID, Lresult, callback)
 {
-    dbQuery("SELECT * FROM ws_results WHERE resultID="+resultID, function(result) {
+    dbQuery({q:"SELECT * FROM ws_results WHERE resultID="+resultID}, function(result) {
+        console.log('result', result);
+        console.log('Lresult', Lresult);
         if (!result[0]) { // If record is empty
             reportError("NO RESULT RECORD COULD BE FOUND! FOR ALERT #"+resultID, 'calcWinners', true);
+        }
+
+        if (Lresult.length === 0) {
+            reportError("MISSING TERRITORY RECORDS FOR ALERT #"+resultID);
+            return false;
+        }
+
+        if (Lresult[0].controlVS.length === 0 || Lresult[0].controlNC.length === 0 || Lresult[0].controlTR.length === 0) {
+            reportError("MISSING FACTION CONTROL RECORDS / VALUES FOR ALERT #"+resultID);
+            return false;
         }
 
         var winner = "TO CALC";
@@ -2865,7 +2875,7 @@ function calculateCriticalMassWinners(message, empires, mapResult, callback)
 {
     console.log('CALCULATING CRITICAL MASS WINNERS');
 
-    APIAlertTypes(message.type_id, function(result) {
+    APIAlertTypes(parseInt(message.type_id), function(result) {
         var metaInfo = result;
         var triggeringFactionWon = false;
         var winner = false;
@@ -2900,133 +2910,133 @@ function APIAlertTypes(eventID, callback)
     var faction = null;
 
     switch (eventID) {
-        case '1':
+        case 1:
             type = "Territory";
             cont = "Indar";
             zone = 2;
             break;
-        case '2':
+        case 2:
             type = "Territory";
             cont = "Esamir";
             zone = 6;
             break;
-        case '3':
+        case 3:
             type = "Territory";
             cont = "Amerish";
             zone = 4;
             break;
-        case '4':
+        case 4:
             type = "Territory";
             cont = "Hossin";
             zone = 8;
             break;
-        case '5':
+        case 5:
             type = "ERROR";
             cont = "ERROR";
             break;
-        case '6':
+        case 6:
             type = "ERROR";
             cont = "ERROR";
             break;
-        case '7':
+        case 7:
             type = "Bio";
             cont = "Amerish";
             zone = 4;
             break;
-        case '8':
+        case 8:
             type = "Tech";
             cont = "Amerish";
             zone = 4;
             break;
-        case '9':
+        case 9:
             type = "Amp";
             cont = "Amerish";
             zone = 4;
             break;
-        case '10':
+        case 10:
             type = "Bio";
             cont = "Indar";
             zone = 2;
             break;
-        case '11':
+        case 11:
             type = "Tech";
             cont = "Indar";
             zone = 2;
             break;
-        case '12':
+        case 12:
             type = "Amp";
             cont = "Indar";
             zone = 2;
             break;
-        case '13':
+        case 13:
             type = "Bio";
             cont = "Esamir";
             zone = 6;
             break;
-        case '14':
+        case 14:
             type = "Amp";
             cont = "Esamir";
             zone = 6;
             break;
-        case '15':
+        case 15:
             type = "Bio";
             cont = "Hossin";
             zone = 8;
             break;
-        case '16':
+        case 16:
             type = "Tech";
             cont= "Hossin";
             zone = 8;
             break;
-        case '17':
+        case 17:
             type = "Amp";
             cont = "Hossin";
             zone = 8;
             break;
-        case '31':
+        case 31:
             type = "Territory";
             cont = "Indar";
             zone = 2;
             break;
-        case '32':
+        case 32:
             type = "Territory";
             cont = "Esamir";
             zone = 6;
             break;
-        case '33':
+        case 33:
             type = "Territory";
             cont = "Amerish";
             zone = 4;
             break;
-        case '34':
+        case 34:
             type = "Territory";
             cont = "Hossin";
             zone = 8;
             break;
-        case '123':
-        case '124':
-        case '125':
+        case 123:
+        case 124:
+        case 125:
             type = "CriticalMass";
             cont = "Indar";
             zone = 2;
             break;
-        case '126':
-        case '127':
-        case '128':
+        case 126:
+        case 127:
+        case 128:
             type = "CriticalMass";
             cont = "Esamir";
             zone = 6;
             break;
-        case '129':
-        case '130':
-        case '131':
+        case 129:
+        case 130:
+        case 131:
             type = "CriticalMass";
             cont = "Hossin";
             zone = 8;
             break;
-        case '132':
-        case '133':
-        case '134':
+        case 132:
+        case 133:
+        case 134:
             type = "CriticalMass";
             cont = "Amerish";
             zone = 4;
@@ -3034,29 +3044,29 @@ function APIAlertTypes(eventID, callback)
     }
 
     switch (eventID) {
-        case '124':
-        case '127':
-        case '130':
-        case '133':
+        case 124:
+        case 127:
+        case 130:
+        case 133:
             faction = "VS";
             break;
-        case '125':
-        case '128':
-        case '131':
-        case '134':
+        case 125:
+        case 128:
+        case 131:
+        case 134:
             faction = "NC";
             break;
-        case '123':
-        case '126':
-        case '129':
-        case '132':
+        case 123:
+        case 126:
+        case 129:
+        case 132:
             faction = "TR";
             break;
     }
 
     var result = null;
 
-    if (type !== null && cont !== null) { // If valid
+    if (type && cont && zone) { // If valid
         result = {
             type: type,
             cont: cont,
@@ -3277,10 +3287,11 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
         }
 
         if (kID !== 0) {
+            var vKQueryT = "UPDATE ws_vehicles_totals SET "+Kquery+" WHERE vehicleID = "+kID+" AND resultID = "+resultID;
             // Killer Vehicle
-            dbQuery("UPDATE ws_vehicles_totals SET "+Kquery+" WHERE vehicleID = "+kID+" AND resultID = "+resultID, function(result) {
+            dbQuery({q:vKQueryT}, function(result) {
                 if (result.affectedRows === 0) { // If no update happened, try again
-                    dbQueryParameter("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalKillObject, function() {
+                    dbQuery({q:"INSERT INTO ws_vehicles_totals SET ?", d:vehicleTotalKillObject, f:vKQueryT}, function() {
                         if (config.debug.vehicles === true) {
                             console.log("Inserted New Attacker Vehicle Total Record for alert #" + resultID);
                         }
@@ -3288,9 +3299,11 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                 }
             });
 
-            dbQuery("UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID, function(result) {
+            var vKQuery = "UPDATE ws_vehicles SET "+Kquery+" WHERE resultID = "+resultID+" AND playerID='"+killerID+"' AND vehicleID="+kID;
+
+            dbQuery({q:vKQuery}, function(result) {
                 if (result.affectedRows === 0) { // If no update happened, must be an insert
-                    dbQueryParameter("INSERT INTO ws_vehicles SET ?", vehiclePlayerKillObject, function() {
+                    dbQuery({q:"INSERT INTO ws_vehicles SET ?", d:vehiclePlayerKillObject, f:vKQuery}, function() {
                         if (config.debug.vehicles === true) {
                             console.log("Inserted New Attacker Vehicle Total Record for alert #" + resultID);
                         }
@@ -3309,10 +3322,11 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
         }
 
         if (vID !== 0) {
+            var vDQueryT = "UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID;
             // Victim Vehicle
-            dbQuery("UPDATE ws_vehicles_totals SET "+Vquery+" WHERE vehicleID ="+vID+" AND resultID = "+resultID, function(result) {
+            dbQuery({q:vDQueryT}, function(result) {
                 if (result.affectedRows === 0) { // If no update happened, must be an insert
-                    dbQueryParameter("INSERT INTO ws_vehicles_totals SET ?", vehicleTotalDeathObject, function() {
+                    dbQuery({q:"INSERT INTO ws_vehicles_totals SET ?", d:vehicleTotalDeathObject, f:vDQueryT}, function() {
                         if (config.debug.vehicles === true) {
                             console.log("Inserting New Victim Vehicle Total Record fort alert #" + resultID);
                             console.log(vID);
@@ -3322,9 +3336,11 @@ function incrementVehicleKills(type, kID, vID, resultID, killerID, victimID)
                 }
             });
 
-            dbQuery("UPDATE ws_vehicles SET "+Vquery+" WHERE resultID = "+resultID+" AND playerID='"+victimID+"' AND vehicleID="+vID, function(result) {
+            var vDQuery = "UPDATE ws_vehicles SET "+Vquery+" WHERE resultID = "+resultID+" AND playerID='"+victimID+"' AND vehicleID="+vID;
+
+            dbQuery({q:vDQuery}, function(result) {
                 if (result.affectedRows === 0) { // If no update happened, must be an insert
-                    dbQueryParameter("INSERT INTO ws_vehicles SET ?", vehiclePlayerDeathObject, function() {
+                    dbQuery({q:"INSERT INTO ws_vehicles SET ?", d:vehiclePlayerDeathObject, f:vDQuery}, function() {
                         if (config.debug.vehicles === true) {
                             console.log("Inserting New Victim Vehicle Record fort alert #" + resultID);
                             console.log(vID);
@@ -3397,7 +3413,7 @@ function insertInitialMapData(data, callback)
                 console.log(json);
                 var mapData = json["map_list"][0]["Regions"]["Row"];
 
-                dbQuery("SELECT * FROM facility_data WHERE zone = "+zoneID, 'cache', function(data) {
+                dbQuery({q:"SELECT * FROM facility_data WHERE zone = "+zoneID, p:'cache'}, function(data) {
                     var facData = {};
 
                     if (data[0] !== undefined) { // If someone came back
@@ -3429,8 +3445,10 @@ function insertInitialMapData(data, callback)
                                 resultID: resultID
                             };
 
-                            dbQueryParameter("INSERT INTO ws_map_initial SET ?", object, function() {
-                                console.log("INSERTED MAP DATA FOR ALERT: #"+resultID);
+                            dbQuery({q:"INSERT INTO ws_map_initial SET ?", d:object}, function() {
+                                if (config.debug.mapinitial === true) {
+                                    console.log("INSERTED MAP DATA FOR ALERT: #"+resultID);
+                                }
                             });
                         });
                     } else {
@@ -3457,9 +3475,8 @@ function insertInitialMapData(data, callback)
     });
 }
 
-var messagesRecieved = 0;
-var messagesRecievedLast = 0;
-var messagesRecievedSec = 0;
+var messagesReceived = 0;
+var messagesReceived30Sec = 0;
 var forcedEndings = 0;
 
 // Loop through instances checking that they're valid and are not due to be ending
@@ -3468,28 +3485,33 @@ function checkInstances(callback)
     var time = new Date().getTime();
     time = parseInt(time / 1000); // To convert to seconds
 
-    console.log(instances);
+    if (config.debug.instances) {
+        console.log(instances);
+    }
 
-    Object.keys(instances).forEach(function(key) {
-        var world = instances[key].world;
-        var zone = instances[key].zone;
-        var overtime = instances[key].endTime + 10; // If end + 10 seconds
-        console.log('Time', time);
-        console.log('Overtime', overtime);
+    Object.keys(instances).forEach(function(resultID) {
+        var world = instances[resultID].world;
+        var zone = instances[resultID].zone;
+        var overtime = instances[resultID].endTime + 10; // If end + 10 seconds
+
+        if (config.debug.instances) {
+            console.log('Time', time);
+            console.log('Overtime', overtime);
+        }
 
         // See if the alert is overdue
         if (time > overtime) { // If overdue
-            var resultID = instances[key].resultID;
+            var resultID = instances[resultID].resultID;
 
             console.log(critical("====================== ALERT #"+resultID+" OVERDUE!!!====================="));
             console.log("CHECKING TIME: "+time);
-            console.log("RESULT TIME: "+instances[key].endTime); // Alert Time
+            console.log("RESULT TIME: "+instances[resultID].endTime); // Alert Time
 
             var endmessage = {// Fake the end message
                 world_id: world,
                 zone_id: zone,
-                start_time: instances[key].startTime, // Needed for subscriptions
-                end_time: instances[key].endTime
+                start_time: instances[resultID].startTime, // Needed for subscriptions
+                end_time: instances[resultID].endTime
             };
 
             forcedEndings++;
@@ -3602,29 +3624,37 @@ function fireSubscriptions(message, resultID, mode, event)
         }
     }
 
-    if (event !== true) {
-        setInstances(message, resultID, mode);
+    if (event !== true && mode === "subscribe") {
+        setInstances(message, resultID);
     }
 }
 
-function setInstances(message, resultID, mode)
+function setInstances(message, resultID)
 {
-    if (mode === "subscribe") {
-        instances[resultID] = {
-            status:     true,
-            resultID:   resultID,
-            startTime:  parseInt(message.start_time),
-            endTime:    calcEndTime(message.start_time, message.metagame_event_type_id),
-            type:       parseInt(message.metagame_event_type_id),
-            world:      parseInt(message.world_id),
-            zone:       parseInt(message.zone_id),
-            controlVS:  parseInt(message.control_vs),
-            controlNC:  parseInt(message.control_nc),
-            controlTR:  parseInt(message.control_tr),
-            instanceID: parseInt(message.instance_id)
-        };
+    var zone = parseInt(message.zone_id);
+    if (zone === 0) {
+        console.log('Recalculating zone for setInstances');
+        APIAlertTypes(parseInt(message.metagame_event_type_id), function(data) {
+            zone = data.zone;
+        });
+    }
+    instances[resultID] = {
+        status:     true,
+        resultID:   resultID,
+        startTime:  parseInt(message.start_time),
+        endTime:    calcEndTime(message.start_time, message.metagame_event_type_id),
+        type:       parseInt(message.metagame_event_type_id),
+        world:      parseInt(message.world_id),
+        zone:       parseInt(zone),
+        controlVS:  parseInt(message.control_vs),
+        controlNC:  parseInt(message.control_nc),
+        controlTR:  parseInt(message.control_tr),
+        instanceID: parseInt(message.instance_id)
+    };
 
-        console.log(success("INSTANCE SUCCESSFULLY CREATED!"));
+    if (config.debug.instances) {
+        console.log('instance created for result ' + resultID);
+        console.log(instances[resultID]);
     }
 }
 
@@ -3632,7 +3662,7 @@ function restoreSubs(callback)
 {
     instances = {}; // Clear object if reconnected or being rebuilt
 
-    dbQuery('SELECT * FROM ws_instances', function(resultInstance) {
+    dbQuery({q:'SELECT * FROM ws_instances'}, function(resultInstance) {
         console.log("INITIAL INSTANCE QUERY FIRED");
 
         var time = new Date().getTime() / 1000;
@@ -3673,7 +3703,7 @@ function generate_weapons(callback)
 {
     console.log("GENERATING WEAPONS!");
 
-    dbQuery("SELECT * FROM weapon_data", 'cache', function(result) {
+    dbQuery({q:"SELECT * FROM weapon_data", p:'cache'}, function(result) {
         var weaponFilterMap = {};
 
         for (var i = result.length - 1; i >= 0; i--) {
@@ -3704,13 +3734,13 @@ function combatHistory() // Called by generateActives function to log active ale
     var time = date.getTime();
     time = time / 1000; // Convert to websocket / PHP times
 
-    if (messagesRecieved > 1) {
+    if (messagesReceived30Sec > 1) {
         console.log(success("=========== GENERATING COMBAT HISTORY ==============="));
 
         Object.keys(instances).forEach(function(key) {
             var resultID = instances[key].resultID;
 
-            dbQuery("SELECT * FROM ws_factions WHERE resultID="+resultID, function(result) {
+            dbQuery({q:"SELECT * FROM ws_factions WHERE resultID="+resultID}, function(result) {
                 if (result[0]) { // If got a record
                     var total = parseInt(result[0].killsVS + result[0].killsNC + result[0].killsTR);
 
@@ -3725,14 +3755,14 @@ function combatHistory() // Called by generateActives function to log active ale
 
                         sendResult("combatHistory", post, resultID);
 
-                        dbQueryParameter("INSERT INTO ws_combat_history SET ?", post, function() {
+                        dbQuery({q:"INSERT INTO ws_combat_history SET ?", d:post}, function() {
                             if (config.debug.status === true) {
                                 console.log(success("Inserted Combat History for Alert #"+resultID));
                             }
                         });
                     }
                 } else {
-                console.log(critical("UNABLE TO RETRIEVE KILL COMBAT HISTORY FOR ALERT #"+resultID));
+                    console.log(critical("UNABLE TO RETRIEVE KILL COMBAT HISTORY FOR ALERT #"+resultID));
                 }
             });
         });
@@ -3872,8 +3902,7 @@ function checkDuplicateMessages(message, callback)
                 status = true;
             } else {
                 if (messagesDuplicates.FacilityControl[facilityID] === undefined) {
-                    messagesDuplicates.FacilityControl[facilityID] =
-                    {
+                    messagesDuplicates.FacilityControl[facilityID] = {
                         timestamp: timestamp
                     };
 
@@ -3928,6 +3957,7 @@ function checkDuplicateMessages(message, callback)
 function calcEndTime(started, type) // Calculates estimated end time of an alert based off type and start time
 {
     started = parseInt(started);
+    type = parseInt(type);
     var toAdd = 0;
 
     switch(type) {
@@ -4006,8 +4036,7 @@ wss.on('connection', function(clientConnection) {
             if (apiKey !== undefined) {
                 console.log(critical("UNAUTHORISED API KEY ATTEMPT! "+apiKey));
                 console.log(critical(JSON.stringify(message, null, 4)));
-            }
-            else if (config.debug.auth === true) {
+            } else if (config.debug.auth === true) {
                 console.log(critical("INVALID API KEY FORMAT DETECTED."));
                 console.log(critical("API KEY: "+apiKey));
             }
@@ -4045,11 +4074,11 @@ wss.on('connection', function(clientConnection) {
 
         clientConnection.on('message', function(message) {
             try { // Check if the message we get is valid json.
-                var JSON = JSON.parse(message); //Messages Received From Census are Formated in JSON. Parse it, and you'll be able to access the data the same as a JSON object.
-                message = JSON.payload;
+                var parsedJson = JSON.parse(message);
+                message = parsedJson.payload;
             }
             catch (exception) {
-                console.log(message);
+                console.log(JSON.stringify(message, null, 4));
                 console.log(critical("INVALID JSON RECEIVED"));
 
                 clientConnection.send('{"response":"Invalid Input"}');
@@ -4208,42 +4237,6 @@ wss.on('connection', function(clientConnection) {
     }); // End of check API key
 });
 
-/**
- * Interval functions which fire maintenance tasks or required operations
- */
-setInterval(function() {
-    usage.lookup(pid, function(err, result) {
-        perfSecs++;
-
-        if (result !== undefined) {
-            var memory = Math.round(result.memory / 1024 / 1024);
-            var cpu = Math.round(result.cpu);
-            var conns = Object.keys(clientConnections).length;
-
-            if (config.debug.perf === true && perfSecs === 30) {
-                console.log(notice("============== PERFORMANCE =============="));
-                console.log("CPU: "+cpu+"% - MEM: "+memory+"MB - Conns: "+conns);
-                console.log(notice("========================================="));
-
-                perfSecs = 0;
-            }
-
-            perfStats = {
-                "cpu": cpu,
-                "mem": memory,
-                "conns": conns,
-                "msgSec": messagesRecievedSec,
-                "msgLast": messagesRecievedLast * 2,
-                "state": connectionState
-            };
-
-            sendAdmins("perf", perfStats);
-
-            messagesRecievedSec = 0;
-        }
-    });
-}, 1000);
-
 cleanCache();
 
 /**
@@ -4299,11 +4292,11 @@ function cleanCache()
     console.log(notice("Running cache clean routine"));
     var expiry = Math.round(new Date().getTime() / 1000);
 
-    dbQuery("DELETE FROM outfit_cache WHERE expires <= "+expiry, 'cache', function(result) {
+    dbQuery({q:"DELETE FROM outfit_cache WHERE expires <= "+expiry, p:'cache'}, function(result) {
         console.log("Outfit cache cleaned. Removed: "+result.affectedRows);
     });
 
-    dbQuery("DELETE FROM player_cache WHERE expires <= "+expiry, 'cache', function(result) {
+    dbQuery({q:"DELETE FROM player_cache WHERE expires <= "+expiry, p:'cache'}, function(result) {
         console.log("Player cache cleaned. Removed: "+result.affectedRows);
     });
 }
@@ -4313,14 +4306,36 @@ var maintInterval;
 function setMaintenanceInterval() {
     var maintTimer = 30 * 1000;
     maintInterval = setInterval(function() {
-        if (config.debug.status === true && messagesRecieved > 5) {
-            console.log(notice("TOTAL MESSAGES RECEIVED (1 min): "+messagesRecieved));
-        }
-
         combatHistory(); // Log combat history for active alerts
 
-        messagesRecieved = 0;
-        messagesRecievedLast = messagesRecieved;
+        usage.lookup(pid, function(err, result) {
+            if (result !== undefined) {
+                var memory = Math.round(result.memory / 1024 / 1024);
+                var cpu = Math.round(result.cpu);
+                var clients = Object.keys(clientConnections).length;
+
+                if (config.debug.perf === true) {
+                    console.log(notice("============== PERFORMANCE =============="));
+                    console.log("CPU: "+cpu+"% - MEM: "+memory+"MB - Clients: "+clients);
+                    console.log("Messages 30: "+messagesReceived30Sec);
+                    console.log("Messages Total: "+messagesReceived);
+                    console.log(notice("========================================="));
+                }
+
+                perfStats = {
+                    cpu: cpu,
+                    mem: memory,
+                    clients: clients,
+                    msgTotal: messagesReceived,
+                    msg30Sec: messagesReceived30Sec,
+                    state: connectionState
+                };
+
+                sendAdmins("perf", perfStats);
+
+                messagesReceived30Sec = 0;
+            }
+        });
 
         checkInstances(function() {
             if (config.debug.instances === true) {
@@ -4360,30 +4375,41 @@ function setMaintenanceInterval() {
 }
 
 function processActives(message) {
-    var data = message.worlds;
+    var worlds = message.worlds;
 
     if (config.debug.sync === true) {
+        console.log('CURRENT INSTANCES:');
         console.log(JSON.stringify(instances, null, 4));
     }
 
-    Object.keys(data).forEach(function(world) {
-        Object.keys(data[world].metagame_events).forEach(function(a) {
-
+    Object.keys(worlds).forEach(function(world) {
+        Object.keys(worlds[world].metagame_events).forEach(function(a) {
             var instanceFound = false;
-            var alert = data[world].metagame_events[a];
+            var alert = worlds[world].metagame_events[a];
             var instanceID = parseInt(alert.instance_id);
+            var zone = parseInt(alert.zone_id);
+
+            if (!zone || zone === 0) {
+                APIAlertTypes(parseInt(alert.metagame_event_type_id), function (data) {
+                    zone = data.zone;
+                });
+            }
 
             if (config.debug.sync === true) {
                 console.log("Instance ID", instanceID);
             }
 
             // Check for the instanceID in the instances object
-            Object.keys(instances).forEach(function(w) {
-                console.log(instances[w]);
-                if (instances[w].instanceID === instanceID) {
+            Object.keys(instances).forEach(function(resultID) {
+                var localInstanceID = parseInt(instances[resultID].instanceID);
+                if (config.debug.sync) {
+                    console.log("Local Instance ID", localInstanceID);
+                }
+
+                if (localInstanceID === instanceID) {
                     if (config.debug.sync === true) {
                         console.log(success("Alert found"));
-                        console.log(notice(JSON.stringify(instances[w], null, 4)));
+                        console.log(notice(JSON.stringify(instances[resultID], null, 4)));
                     }
 
                     instanceFound = true;
@@ -4392,7 +4418,7 @@ function processActives(message) {
 
             // If instance was not found, force start
             if (instanceFound === false) {
-                reportError("Sync detected missed alert! World: "+ world, "Instance Sync");
+                reportError("Sync detected missed alert! World: "+ world + " - Zone: " + zone, "Instance Sync");
 
                 delete alert.facilities;
 
@@ -4401,6 +4427,8 @@ function processActives(message) {
                 }
 
                 alert.world_id = world;
+
+                console.log(notice("=== FORCE STARTING ALERT ON WORLD: " + world));
 
                 insertAlert(alert, function(resultID) {
                     console.log(success("================ FORCE STARTED NEW ALERT #"+resultID+" ("+supplementalConfig.worlds[world]+") ================"));
